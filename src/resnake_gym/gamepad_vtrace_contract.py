@@ -47,6 +47,11 @@ class VTraceConfig:
     shaping_scale: float = 0.25
     death_cost: float = 3.0
     spatial_pool: bool = True
+    # Serialized in the original gamepad-vtrace-v3 contract.  Keep these
+    # fields so existing dpad5 checkpoints remain loadable; the retired H1
+    # diagnostic is rejected explicitly below.
+    chunk_rho: float | None = None
+    action_head: str = "dpad5"
     actor_processes: int = 8
     envs_per_actor: int = 2
     actor_sync_steps: int = 128
@@ -98,6 +103,10 @@ class VTraceConfig:
             raise ValueError("minimum batch size cannot exceed its hard limit")
         if not 0 < self.gamma <= 1:
             raise ValueError("gamma must be in (0, 1]")
+        if self.action_head != "dpad5":
+            raise ValueError("V-trace supports the dpad5 action head only")
+        if self.chunk_rho is not None:
+            raise ValueError("V-trace dpad5 does not support chunk_rho")
         if self.decoder not in ("parallel", "gru"):
             raise ValueError("decoder must be parallel or gru")
         for name in ("rho_bar", "c_bar", "pg_rho_bar"):

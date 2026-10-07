@@ -45,3 +45,19 @@ def test_score_function_distribution_is_categorical_dpad5():
     loss = -distribution.log_prob(distribution.sample()).sum()
     loss.backward()
     assert model.actor.weight.grad.abs().sum() > 0
+
+
+@pytest.mark.parametrize("action_head", ["raw", "dpad5"])
+def test_both_action_heads_expose_differentiable_20_control_chunks(action_head):
+    model = GamepadPolicy(dim=16, chunk_length=2, action_head=action_head)
+    board = torch.zeros(1, 9, 20, 31)
+    board[:, 2, 10, 15] = 1
+
+    report, _, _ = model(board, torch.zeros(1, 20), torch.zeros(1, 3))
+    assert report.shape == (1, 2, 20)
+
+    weights = torch.arange(1, 21, dtype=report.dtype)
+    (report * weights).sum().backward()
+    assert model.actor.weight.grad is not None
+    assert torch.isfinite(model.actor.weight.grad).all()
+    assert model.actor.weight.grad.abs().sum() > 0

@@ -10,9 +10,11 @@
 3. 增大rollout后若直接对整段循环网络反传，计算和显存随采样长度一起增长；稀少的
    成功经验也需要在发现时保留，不能只等一个可能很长的episode结束。
 
-当前实现分别采用Snake因果边缘概率、只计取食的可变长度采样、存储状态加短窗口
-BPTT，以及带取食快照的成功分层SIL。它们是四项可拆开的项目适配，不能作为一个已经验证有效的
-新算法来宣传。目前只有接口和训练语义，尚无v3学习曲线或31×20通关结果。
+PPO/SIL是当前两条受支持训练路线之一。它分别采用Snake因果边缘概率、只计取食的
+可变长度采样、存储状态加短窗口BPTT，以及带取食快照的成功分层SIL。保留并复用
+自主产生的成功经验是明确需求，不是为算法横向对比临时增加的harness。以上仍是四项
+可拆开的项目适配，不能作为一个已经验证有效的新算法来宣传。目前只有接口和训练
+语义，尚无31×20通关结果。V-trace是另一条受支持路线，不取代本路线的SIL语义。
 
 ## 2. 不变的外部接口
 
@@ -68,13 +70,13 @@ baseline或影响网络，只利用了本环境可以直接检查的绑定关系
 
 | 参数 | 默认值 | 精确含义 |
 | --- | ---: | --- |
-| `collection_mode` | `events` | 使用下述取食配额；程序类`PPOConfig`本身仍默认`fixed` |
+| `collection_mode` | `events` | CLI与程序类`PPOConfig`都使用下述取食配额 |
 | `num_envs` | 4 | 同步完成一次并行环境轮次后才检查停止条件 |
-| `minimum_steps` | 128 | 每环境至少采128次策略决策 |
+| `minimum_steps` | 1 | 每环境至少采1次策略决策 |
 | `rollout_steps` | 512 | 每环境的硬上限，不是游戏tick数 |
-| `event_target` | 4 | 全体环境合计的取食事件数，不是完成回合数 |
+| `event_target` | 1 | 全体环境合计的取食事件数，不是完成回合数 |
 
-达到128次决策以后，只要全局累计取食数达到4，本批次以`food_target`结束。死亡和
+达到每环境1次决策以后，只要全局累计取食数达到1，本批次以`food_target`结束。死亡和
 时间截断会继续记录，但绝不满足配额。到512次仍没有足够取食时以`hard_limit`结束，
 训练不会等待一个可能永远不出现的成功；日志同时记录目标是否达到和缺少几次取食。
 
@@ -82,12 +84,10 @@ baseline或影响网络，只利用了本环境可以直接检查的绑定关系
 截断GAE。PPO使用整批的失败、普通移动和未完成片段；“尽可能包含成功经验”不等于
 丢弃失败样本，或把成功片段当成人工标签。
 
-这不是
-[PPO](https://arxiv.org/abs/1707.06347)
-论文的采样停止规则，而是本项目为稀疏事件做的适配。停止时间依赖策略产生的取食数，
-可能改变有限批次的组成。实验必须保留`collection_mode=fixed`作为对照，并按相同环境
-交互量而不是相同update数比较。food quota提高每批观察到取食的机会，不保证每批达到
-目标，更不证明策略在改善。
+这不是[PPO](https://arxiv.org/abs/1707.06347)论文的采样停止规则，而是本项目为稀疏
+事件做的适配。停止时间依赖策略产生的取食数，可能改变有限批次的组成。
+`collection_mode=fixed`仍是底层配置选项，但工程没有为它保留批量对比harness。
+food quota提高每批观察到取食的机会，不保证每批达到目标，更不证明策略在改善。
 
 ## 5. 长rollout与短BPTT分开
 
@@ -146,17 +146,20 @@ checkpoint保存这些replay-only成功快照，但不保存普通`pending`、�
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
 | `sil_updates` | 2 | 每个PPO update之后执行的SIL update数 |
+| `sil_weight` | 0.1 | SIL目标相对本次SIL优化的缩放系数 |
 | `sil_batch_size` | 1 | 每次SIL抽取的可采样序列数；可以是完成episode、活动快照或恢复后的fragment |
-| `replay_capacity` | 256 | 完成episode及恢复后独立fragment共用的内存容量；活动快照另计 |
+| `replay_capacity` | 256 | 完成episode及恢复后独立fragment共用的序列条数上限；活动快照另计，不限制单序列的transition数或字节数 |
 | `sil_priority_alpha` | 0.0 | 层内优先级指数；0表示层内不按优先级偏置 |
 | `replay_success_fraction` | 0.5 | 成功、失败两层都存在时分给成功层的采样质量 |
 
 默认主池容量为256个序列，容纳完成episode及resume时由快照提升的独立成功fragment。
 溢出时先淘汰最早失败，失败不能挤掉已保存成功；只有池内全是成功才淘汰最早成功。
 正在运行的活动快照不占主池容量，但每环境最多一份，因此可采样序列数最多是
-`replay_capacity + num_envs`。完成回合的GPU归档不随内存淘汰删除；活动快照使用
-每环境固定文件，只保存最新前缀，并在正常完成episode归档时删除。resume则将其另存
-为不绑定环境的retained success fragment。
+`replay_capacity + num_envs`。正式训练以`archive=None`创建replay，不为每个完成
+episode或活动快照创建独立文件，因此不会形成无界episode落盘目录。可恢复checkpoint
+保存条数受限的完成序列和每环境至多一份活动成功快照；单序列本身仍没有transition或
+字节上限。resume时旧快照提升为不绑定
+环境的retained success fragment。
 
 默认`replay_success_fraction=0.5`。成功与失败两层都存在时，序列采样的总质量
 各占0.5；成功层包含完成成功episode、活动取食快照和恢复后保留的成功fragment，
@@ -170,8 +173,8 @@ checkpoint保存这些replay-only成功快照，但不保存普通`pending`、�
 
 损失使用层内“目标概率/实际概率”修正，但不校正回全局均匀转移分布，否则会抵消
 明确设置的成功比例。`alpha=0`只关闭层内优先级作用，并不关闭成功分层。成功保护、
-0.5目标比例、序列优先级和层内校正都是项目适配，不是SIL论文原样实现；它们必须与
-未分层回放做等预算消融。
+0.5目标比例、序列优先级和层内校正都是项目适配，不是SIL论文原样实现；其效果仍待
+训练结果验证，当前工程不因此自动生成消融矩阵。
 
 SIL当前仍从被抽中序列的起点前向重建GRU，每128步detach一次，但会扫描到序列末尾。
 因此计算量仍为O(采样序列总长度)，没有使用PPO的存储状态+burn-in窗口。很长的完成
@@ -179,17 +182,23 @@ SIL当前仍从被抽中序列的起点前向重建GRU，每128步detach一次�
 
 ## 7. checkpoint与可审计指标
 
-新checkpoint格式为`gamepad-ppo-v3`，同时写入并校验四个语义版本：
+raw动作头checkpoint格式为`gamepad-ppo-v3`，默认dpad5动作头格式为
+`gamepad-ppo-v4`。两者都写入并校验动作、场景、时间、奖励、采样、循环更新和SIL
+回放语义；训练目标分别为`snake-causal-marginal-v1`和
+`snake-dpad5-categorical-v1`：
 
 ```text
-training_objective   = snake-causal-marginal-v1
+action_encoding      = xinput-normalized-v1 或 xinput-dpad5-categorical-v1
+scene_encoding       = scene-grid-v2
+time_encoding        = policy-time-v2
+reward_version       = food-efficiency-pbrs-v1
 collection_semantics = food-quota-v1
 recurrent_update     = stored-state-burnin-v1
 replay_objective     = success-snapshot-sil-v2
 ```
 
-旧v2权重的前向反馈和训练概率语义不同，不能静默resume或拿新适配器预览。需要复现
-pre-v3结果时，应保留对应源码和加载器。
+raw与dpad5不能静默互载。旧v2权重的前向反馈和训练概率语义不同，也不能静默resume
+或拿新适配器预览。当前两类checkpoint都由`scripts/evaluate_gamepad_policy.py`评估。
 
 每次update至少核对以下指标，而不是只看总reward：
 
@@ -201,23 +210,27 @@ pre-v3结果时，应保留对应源码和加载器。
   实际抽样数及成功比例；
 - PPO loss、KL、entropy和梯度范数，另行配合独立冻结策略评估。
 
-这些指标只能说明实现按预定语义运行。学习结论必须来自冻结策略、未见seed和多随机
-种子的31×20评估；小棋盘、smoke test、训练episode分数或单个成功片段都不能代替。
+这些指标只能说明实现按预定语义运行。学习结论必须来自通用评估入口对冻结checkpoint
+执行的31×20完整游戏；小棋盘、smoke test、训练episode分数或单个成功片段都不能
+代替。工程默认不运行多seed矩阵或多算法横向比较。
 
-## 8. 需要做的对照
+## 8. 当前验收和待验证假设
 
-在启动长训练前，至少固定环境交互tick、评估seed和模型容量，比较：
+当前工程目标是得到会玩完整31×20贪吃蛇的模型，不维护批量对比实验。训练期间需要
+区分下列事实和假设：
 
-1. `events`与`fixed`采样，判断food quota是否只是改变批次组成；
-2. v3因果边缘目标与独立保留的pre-v3全20维目标，判断梯度方差和学习速度；
-3. PPO-only、未分层SIL、无即时快照的成功分层SIL、当前SIL，判断快照、成功保护和
-   0.5配额各自的贡献；
-4. burn-in/unroll组合，报告吞吐、显存、取食率和通关率，而不只报告loss；
-5. 默认异步时序与延迟压力条件，确认改进不是固定轨迹或无扰动场景造成的。
+- 已确认的实现事实：取食后立即生成成功快照；SIL只使用正优势；replay的序列数受限
+  但字节数与transition数没有独立上限；PPO样本保持on-policy；事件采样存在512次
+  决策硬上限。
+- 待验证假设：反复抽取这些成功序列能改善策略。最小验证是观察SIL实际抽样数、正优势
+  样本数和后续冻结checkpoint的完整游戏成绩；如果没有发生SIL抽样或成绩不随训练
+  改善，就不能宣称该假设成立。
+- 最终验收：`scripts/evaluate_gamepad_policy.py`加载冻结checkpoint，在31×20棋盘完成
+  一整局并真正填满棋盘。训练loss、偶然取食和存活时间不是替代标准。
 
 当前方法仍可能不够。尤其是活动快照依赖value bootstrap、GAE不能跨rollout，且成功
-分层会改变回放目标分布。如果对照显示无收益，应分别修改这些机制，不能仅继续增加
-迭代次数后把失败解释为“训练量不够”。
+分层会改变回放目标分布。如果上述观测不支持学习改善，应定位这些机制，不能仅继续
+增加迭代次数后把失败解释为“训练量不够”。
 
 ## 9. 一手依据与采用范围
 

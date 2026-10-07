@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +30,9 @@ class RealtimeRunOptions:
     logic_fps: float = 10.0
     inference_delay_ms: float = 0.0
     seed: int = 520000
-    horizon: int = 8
+    horizon: int | None = None
     history_limit: int = 128
-    timing_v2: bool = False
+    timing_v2: bool | None = None
     solver_time_ms: float | None = None
 
 
@@ -51,6 +51,28 @@ def _load_policy(spec: str | None, seed: int) -> Any | None:
     policy = getattr(importlib.import_module(module), factory)()
     policy.reset(seed=seed)
     return policy
+
+
+def _resolve_policy_options(
+    options: RealtimeRunOptions, policy: Any | None
+) -> RealtimeRunOptions:
+    """Derive timing/horizon from a capable adapter and reject mismatches."""
+    policy_horizon = getattr(policy, "chunk_length", None)
+    horizon = options.horizon
+    if horizon is None:
+        horizon = int(policy_horizon) if policy_horizon is not None else 8
+    elif policy_horizon is not None and horizon != int(policy_horizon):
+        raise ValueError(
+            f"runner horizon {horizon} differs from policy horizon {policy_horizon}"
+        )
+
+    requires_timing_v2 = bool(getattr(policy, "requires_timing_v2", False))
+    timing_v2 = options.timing_v2
+    if timing_v2 is None:
+        timing_v2 = requires_timing_v2
+    if requires_timing_v2 and not timing_v2:
+        raise ValueError("policy requires timing-v2 observations")
+    return replace(options, horizon=horizon, timing_v2=timing_v2)
 
 
 def _realtime_config(options: RealtimeRunOptions, trace: Path) -> RealTimeConfig:
@@ -155,11 +177,14 @@ def _timing_report(
 
 def run_realtime_policy(options: RealtimeRunOptions) -> dict[str, Any]:
     """Run one policy against the independent clock and write its audit files."""
-    if options.horizon < 1 or options.inference_delay_ms < 0:
+    if options.horizon is not None and options.horizon < 1:
         raise ValueError("invalid horizon or delay")
+    if options.inference_delay_ms < 0:
+        raise ValueError("invalid horizon or delay")
+    policy = _load_policy(options.policy_spec, options.seed)
+    options = _resolve_policy_options(options, policy)
     options.output.mkdir(parents=True, exist_ok=False)
     trace = options.output / "timeline.jsonl"
-    policy = _load_policy(options.policy_spec, options.seed)
     config = _realtime_config(options, trace)
     with RealTimeGame(config) as game:
         _drive_game(game, policy, options)

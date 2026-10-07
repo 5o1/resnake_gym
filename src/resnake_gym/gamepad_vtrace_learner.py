@@ -589,6 +589,7 @@ class GamepadVTraceLearner:
     def checkpoint(self) -> dict[str, Any]:
         payload = {
             **checkpoint_metadata(self.config),
+            "artifact_kind": "training-state",
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "update": self.update_count,
@@ -606,6 +607,9 @@ class GamepadVTraceLearner:
 
     def restore(self, payload: dict[str, Any]) -> None:
         validate_checkpoint(payload)
+        inference_only = payload.get("artifact_kind") == "inference-policy"
+        if inference_only or "optimizer" not in payload:
+            raise ValueError("restore requires a full training-state checkpoint")
         restored = VTraceConfig(**payload["config"])
         topology_keys = {"actor_processes", "envs_per_actor", "queue_capacity"}
         for key in asdict(restored).keys() - topology_keys:

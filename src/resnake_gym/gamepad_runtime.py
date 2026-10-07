@@ -1,4 +1,10 @@
-"""Construction helpers for the V-trace gamepad policy and task."""
+"""Algorithm-independent construction helpers for gamepad policies and tasks.
+
+The PPO and V-trace trainers intentionally share the same observation batching,
+model construction, and environment construction semantics.  Keeping those
+operations here prevents either training algorithm from becoming infrastructure
+for the other one.
+"""
 
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
@@ -20,6 +26,8 @@ class GamepadModelConfig(Protocol):
     chunk_length: int
     decoder: str
     spatial_pool: bool
+    chunk_rho: float | None
+    action_head: str
 
 
 class GamepadEnvironmentConfig(Protocol):
@@ -46,7 +54,7 @@ class GamepadEnvironmentConfig(Protocol):
 
 
 def build_model(config: GamepadModelConfig) -> GamepadPolicy:
-    """Build the categorical D-pad policy."""
+    """Build the policy architecture shared by PPO and V-trace."""
     return GamepadPolicy(
         config.dim,
         config.chunk_length,
@@ -54,6 +62,8 @@ def build_model(config: GamepadModelConfig) -> GamepadPolicy:
         time_features=True,
         decoder=config.decoder,
         spatial_pool=config.spatial_pool,
+        chunk_rho=config.chunk_rho,
+        action_head=config.action_head,
     )
 
 

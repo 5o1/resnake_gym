@@ -15,6 +15,9 @@ actor即使继续玩同一局，第一段末尾也只能用当时的value作boot
 3. `bptt_window`只限制一次保留的自动求导图，默认且最大为128；
 4. collection batch由若干条已经闭合的credit trace组成，用于一次optimizer step。
 
+V-trace是当前两条受支持训练路线之一，用来处理异步actor/learner的策略滞后和跨
+fragment信用；它不是唯一训练路线，也不替代PPO/SIL对自主成功经验的保存与复用。
+
 所以，`128`不再同时表示回报边界和反传边界。默认
 `credit_trace_max_transitions=2048`，一条取食轨迹可以跨过多个128步fragment；
 V-trace递推看完整条轨迹，GRU梯度仍按不超过128步的窗口截断。
@@ -43,31 +46,31 @@ V-trace递推来自[IMPALA论文](https://proceedings.mlr.press/v80/espeholt18a/
 [LASER](https://proceedings.mlr.press/v119/schmitt20a.html)说明大规模异步回放需要处理
 陈旧数据和稳定性问题。当前版本没有实现LASER的trust-region机制，也不把孤立
 fragment作为replay样本训练。正式训练CLI不再暴露replay参数，checkpoint sidecar只
-保存assembler运行状态。旧实现移入`resnake_gym.experimental`，仅供历史复现和单独
-对照；在能以完整credit trace定义回放单位、恢复行为概率及验证陈旧度以前，不做
-progress replay实验。
+保存assembler运行状态。旧实验实现及其兼容入口已经删除；在能以完整credit trace
+定义回放单位、恢复行为概率及验证陈旧度以前，不做progress replay实验。
 
 ## 动作和时间仍按手柄记录
 
-J8策略在一个chunk的每个槽分别采样五类动作：
+当前V-trace策略在一个chunk的每个槽分别采样五类动作：
 
 ```text
 neutral / up / down / left / right
 ```
 
-固定模板把类别展开成`[L,20]`标准手柄报告。H1诊断头只采样一个五分类变量，再把
-同一报告保持`L`个槽。模板不读取蛇头、食物、墙或当前方向，不删除危险动作，也不把
-反向请求改成安全方向。环境仍然只接收完整手柄报告。
+固定模板把类别展开成`[L,20]`标准手柄报告。模板不读取蛇头、食物、墙或当前方向，
+不删除危险动作，也不把反向请求改成安全方向。环境仍然只接收完整手柄报告。
+曾经的H1保持动作头只采样一个类别并复制整个chunk；它现在只是历史因果诊断，已从
+当前实现和checkpoint契约退出。
 
 训练数据分开保存：
 
-1. `policy_actions`：J8为`[L]`个五分类变量，H1为一个五分类变量；
+1. `policy_actions`：`[L]`个五分类变量；
 2. `requested_reports`：策略提交的完整20维报告；
 3. `executed_reports`：经过延迟、覆盖、过期和neutral fallback后，每个游戏tick真正
    执行的20维报告。
 
-V-trace只对实际随机变量计算概率。H1保持的重复槽不能重复乘概率；执行后的报告也
-不能反推行为策略概率。每步还保留controller/capture/origin/arrival/execution tick、
+V-trace只对实际随机变量计算概率；执行后的报告不能反推行为策略概率。每步还保留
+controller/capture/origin/arrival/execution tick、
 `submitted_sequence`和simulation timebase。一次环境step跨`K`个游戏tick，reward和
 discount都按这些实际tick汇总。
 
@@ -102,8 +105,8 @@ credit trace只在以下边界闭合：
 
 `food`、`truncated`、`safety_cap`和`resume`通常都是可bootstrap边界；是否bootstrap以
 最后一步实际discount为准。“完整trace”指边界和末观测已经明确，不等于一条完整游戏。
-默认2048只是host内存与异常episode的安全界，不是对游戏最优路径长度的估计。设置
-`--credit-trace-max-transitions 128`做对照时仍经过同一个assembler，不另走旧fragment
+默认2048只是host内存与异常episode的安全界，不是对游戏最优路径长度的估计。显式
+设置`--credit-trace-max-transitions 128`时仍经过同一个assembler，不另走旧fragment
 训练路径。
 
 ## 一次learner更新怎样计算
@@ -168,8 +171,7 @@ checkpoint同时保存learner和credit assembler状态，包括pending、ready�
 
 ```text
 checkpoint                 gamepad-vtrace-v3
-J8 objective               snake-dpad5-event-trace-vtrace-v2
-H1 objective               snake-held-dpad5-event-trace-vtrace-h1-v2
+objective                  snake-dpad5-event-trace-vtrace-v2
 collection                 fifo-stitched-credit-trace-v3
 recurrent state            stored-state-burnin-window-tbptt-v5
 fragment                   gamepad-vtrace-fragment-v5
@@ -178,7 +180,8 @@ credit assembler           gamepad-vtrace-credit-assembler-v2
 ```
 
 v2 checkpoint和v4 fragment没有完整的拼接编号、pending状态与received预算语义，直接
-拒绝加载，不做猜测迁移。J8与H1仍校验动作变量数、模型形状和目标版本，不能互载。
+拒绝加载，不做猜测迁移。历史H1 checkpoint的目标版本、动作编码和模型形状与当前
+实现不同，同样拒绝加载。
 
 ## 必须看的曲线
 
@@ -197,10 +200,9 @@ v2 checkpoint和v4 fragment没有完整的拼接编号、pending状态与receive
   `entropy_normalized_fraction`和`entropy_beta_h`；
 - `pending_credit_bytes`、队列回压和logic ticks/s。
 
-第一项正式信用跨度对照应只改变
-`credit_trace_max_transitions=128/2048`，其余棋盘、扰动、J8/H1、seed、received tick预算
-和`bptt_window=128`保持一致。fragment replay在这轮固定关闭。H1是因果诊断，不应与
-cap变化合并成一个无法归因的实验。
+这些曲线用于判断当前运行是否正确传递长程信用、是否积压数据，以及策略是否真正
+改善；工程不附带信用跨度、多动作头或多seed对比harness。fragment replay在当前
+路线固定关闭。冻结checkpoint统一使用`scripts/evaluate_gamepad_policy.py`验收。
 
 ## 仍然没有解决的部分
 
@@ -211,6 +213,6 @@ cap变化合并成一个无法归因的实验。
 - 不同behavior版本拼接后的稳定范围要靠lag、rho、KL和transport指标验证；当前实现
   不提供超出IMPALA假设的新收敛证明。
 - replay训练暂时禁用。要恢复时，样本单位必须是可校验的完整credit trace，而不是从
-  中间截出的旧fragment，并需另做陈旧度与采样偏差对照。
-- `gamma=.9999`、事件配额、2048安全界和H1/J8仍是待消融设置。
+  中间截出的旧fragment，并需重新验证陈旧度与采样偏差。
+- `gamma=.9999`、事件配额和2048安全界仍是尚未由31×20通关结果验证的工程设置。
 - 当前结果只涉及游戏策略和虚拟手柄，不证明灵巧手、真实HID或联合训练已经成功。

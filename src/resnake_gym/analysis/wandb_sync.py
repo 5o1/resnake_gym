@@ -34,6 +34,7 @@ _SEMANTIC_KEYS = (
     "collection_semantics",
     "recurrent_state",
     "recurrent_update",
+    "replay_objective",
     "action_encoding",
     "reward_version",
     "scene_encoding",
@@ -67,7 +68,7 @@ def alive(pid: int | None, directory: Path) -> bool:
 
     return process_command_matches(
         pid,
-        (b"train_gamepad_vtrace.py",),
+        (b"train_gamepad_ppo.py", b"train_gamepad_vtrace.py"),
         directory,
     )
 

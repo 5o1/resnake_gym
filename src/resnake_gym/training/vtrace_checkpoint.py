@@ -103,6 +103,7 @@ def save_checkpoint(
     torch.save(payload, checkpoint_temporary)
 
     inference = {key: value for key, value in payload.items() if key != "optimizer"}
+    inference["artifact_kind"] = "inference-policy"
     inference["note"] = (
         "inference-only V-trace model; no optimizer or runtime assembler state"
     )

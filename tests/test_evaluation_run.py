@@ -11,7 +11,9 @@ from resnake_gym.evaluation_run import (
     PolicyEvaluationOptions,
     atomic_json,
     build_evaluation_result,
+    run_policy_evaluation,
 )
+from resnake_gym.gamepad_ppo_contract import PPOConfig
 from resnake_gym.gamepad_vtrace_contract import VTraceConfig
 
 
@@ -53,9 +55,37 @@ def test_atomic_json_refuses_to_replace_an_existing_result(tmp_path):
         atomic_json(path, {"complete": False})
 
 
-def test_vtrace_evaluation_script_exposes_the_atomic_writer():
-    namespace = runpy.run_path(
-        Path(__file__).parents[1] / "scripts" / "evaluate_gamepad_vtrace.py"
+def test_ppo_result_preserves_recurrent_and_replay_semantics(tmp_path):
+    options = PolicyEvaluationOptions(
+        checkpoint=tmp_path / "checkpoint.pt",
+        output=tmp_path / "evaluation.json",
+        sizes=("31x20",),
+        episodes=1,
+        seed=41,
+        device="cpu",
+        stochastic=False,
+    )
+    result = build_evaluation_result(
+        {
+            "training_iteration": 12,
+            "recurrent_update": "stored-state-burnin-v1",
+            "replay_objective": "success-snapshot-sil-v2",
+        },
+        PPOConfig(),
+        options,
+        checkpoint_sha256="b" * 64,
+        results=[{"size": "31x20", "seed": 41, "score": 0, "won": False}],
+        timings=[0.01],
     )
 
-    assert namespace["_atomic_json"] is atomic_json
+    assert result["source_training_iteration"] == 12
+    assert result["source_recurrent_update"] == "stored-state-burnin-v1"
+    assert result["source_replay_objective"] == "success-snapshot-sil-v2"
+
+
+def test_general_policy_evaluation_script_uses_the_package_runner():
+    namespace = runpy.run_path(
+        Path(__file__).parents[1] / "scripts" / "evaluate_gamepad_policy.py"
+    )
+
+    assert namespace["run_policy_evaluation"] is run_policy_evaluation

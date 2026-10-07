@@ -12,15 +12,18 @@ ReSnake Gym 是一个让强化学习策略通过标准化虚拟游戏手柄玩�
 
 - 两个 Gymnasium 环境：基础环境 `resnake_gym/ReSnake-v1`，以及带可解性约束
   障碍物的 `resnake_gym/ReSnakePerturbed-v1`。
-- 一条训练主线：循环策略、分布式 actor、V-trace 和跨 fragment 的事件信用轨迹。
+- 两条受支持的训练路线：循环 PPO 加成功经验 SIL 回放，以及分布式 actor 加
+  V-trace 事件信用轨迹。前者落实“发现成功经验后保留并继续训练”的明确需求；
+  后者处理异步 actor/learner 的策略滞后和跨 fragment 信用，不替代 SIL。
 - 可变棋盘输入：策略使用蛇头局部编码和全局注意力，不要求为每种棋盘尺寸重建
   固定尺寸全连接输入。
 - 标准化手柄 API、延迟与丢帧模拟、实时运行入口、checkpoint 恢复、W&B 同步
   和低开销网页预览。
 - 当前尚无通过完整 `31 × 20` 棋盘通关验收的模型。
 
-仓库只维护上述当前路径。旧版方向动作环境、规则教师、BC、PPO/SIL、固定路径
-oracle，以及多算法或多 seed 对比 harness 不属于当前工程入口。
+仓库只维护上述当前路径。旧版方向动作环境、规则教师、BC、固定路径 oracle，
+以及多算法或多 seed 对比 harness 已从当前工程入口删除。PPO/SIL 和 V-trace 都是
+当前受支持实现，不把其中任何一条写成唯一训练路线。
 
 ## 安装
 
@@ -81,7 +84,23 @@ env.close()
 
 ## 训练
 
-正式训练入口只有：
+PPO/SIL 路线用新采集的 on-policy 数据更新 PPO，并把自主产生的成功前缀保存在
+按序列数限制的 replay 中供 SIL 重复学习。默认使用适合 Snake 的 `dpad5` 动作头；`raw` 动作头
+仍受支持，但只供显式选择，不是实体控制的默认动作头。默认事件采样在每环境至少
+1 次决策且全局观察到 1 次取食后停止，每环境最多采 512 次决策：
+
+```bash
+python scripts/train_gamepad_ppo.py \
+  --output /data/lyy/resnake_gym/runs/ppo-sil \
+  --device cuda \
+  --updates 10000 \
+  --save-every 10
+```
+
+完整 episode 不会逐条无界落盘；可恢复 checkpoint 只保存按序列数限制容量的 SIL
+replay 状态和当前成功快照。这个上限不是字节或 transition 上限。
+
+V-trace 路线使用分布式 actor 和跨 fragment 的事件信用轨迹：
 
 ```bash
 python scripts/train_gamepad_vtrace.py \
@@ -97,13 +116,14 @@ fragment 作为传输单元；learner 会按同一环境流拼接到取食、死
 安全上限，再计算 V-trace target。fragment 长度不是一局游戏，也不是人为规定模型
 只能关注多少步。
 
-每个新实验必须使用新的输出目录。目录中主要包含：
+两条路线都要求每次运行使用新的输出目录。目录中主要包含：
 
 - `checkpoint.pt`：模型、优化器和恢复训练所需的状态；
 - `metrics.jsonl`：逐次更新的训练指标；
-- `run.json` 与状态文件：配置、版本和运行进程信息。
+- `config.json`：配置、版本和源码身份；V-trace另有与checkpoint配对的
+  `runtime.pt` assembler状态。
 
-从 checkpoint 恢复时仍写入一个新的目录：
+从 V-trace checkpoint 恢复时仍写入一个新的目录：
 
 ```bash
 python scripts/train_gamepad_vtrace.py \
@@ -114,15 +134,26 @@ python scripts/train_gamepad_vtrace.py \
   --updates 10000
 ```
 
+PPO/SIL 同样使用新输出目录恢复；`--updates`表示本次调用继续执行的更新数，产物中的
+`update`、`policy_version`和`policy-NNNNNN.pt`沿 checkpoint 的累计轴继续编号：
+
+```bash
+python scripts/train_gamepad_ppo.py \
+  --resume /data/lyy/resnake_gym/runs/ppo-sil/checkpoint.pt \
+  --output /data/lyy/resnake_gym/runs/ppo-sil-resumed \
+  --device cuda \
+  --updates 1000
+```
+
 ## 验收
 
 训练是否成功只由模型在完整 `31 × 20` 棋盘上的独立完整游戏判断。默认工程验收
 不要求跑 seed 矩阵，也不以多个算法的横向对比替代“模型是否会玩”这个问题。
 
-当前评估入口是：
+两类 checkpoint 共用同一个评估入口：
 
 ```bash
-python scripts/evaluate_gamepad_vtrace.py \
+python scripts/evaluate_gamepad_policy.py \
   /data/lyy/resnake_gym/runs/main/checkpoint.pt \
   --sizes 31x20 \
   --episodes 1 \
@@ -148,10 +179,15 @@ python scripts/sync_wandb.py \
   --project resnake-gym
 
 # 用 module:factory 策略适配器运行墙钟调度与时间戳审计
+RESNAKE_CHECKPOINT=/data/lyy/resnake_gym/runs/main/checkpoint.pt \
+RESNAKE_DEVICE=cuda \
 python scripts/run_realtime_gamepad.py \
-  --policy my_adapter:load_policy \
+  --policy resnake_gym.policy_adapter:from_environment \
   --output /data/lyy/resnake_gym/runs/realtime
 ```
+
+内置adapter会声明checkpoint的动作块长度和timing-v2要求，实时runner自动采用这两项；
+显式传入不一致的`--horizon`或`--no-timing-v2`会在创建输出目录前报错。
 
 预览从 checkpoint 生成独立完整游戏，用于回答“最近保存的策略实际如何行动”；
 它不回灌训练数据，也不阻塞 actor/learner。实时入口与快速 Gymnasium 采样是两个
@@ -174,6 +210,7 @@ python -m build
 - [虚拟手柄 API](docs/gamepad-api.html)
 - [扰动与实时任务设计](docs/task123-design.html)
 - [障碍物可解性](docs/solvability.html)
+- [PPO/SIL 成功经验设计](docs/ppo-success-training-design.md)
 - [V-trace 长程信用设计](docs/vtrace-progress-replay-design.md)
 
 历史设计文档保留在 `docs/` 中用于追溯讨论，不代表其中每条实验路线仍是当前

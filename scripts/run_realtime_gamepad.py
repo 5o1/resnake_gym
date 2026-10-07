@@ -11,7 +11,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
-        "--policy", help="module:factory, same reset/act API as closed-loop evaluation"
+        "--policy",
+        help="module:factory returning the documented reset/act policy adapter",
     )
     source.add_argument("--fixture-smoke", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
@@ -19,9 +20,19 @@ def parse_args():
     parser.add_argument("--logic-fps", type=float, default=10.0)
     parser.add_argument("--inference-delay-ms", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=520000)
-    parser.add_argument("--horizon", type=int, default=8)
+    parser.add_argument(
+        "--horizon",
+        type=int,
+        default=None,
+        help="default: policy chunk length, or 8 for an adapter without metadata",
+    )
     parser.add_argument("--history-limit", type=int, default=128)
-    parser.add_argument("--timing-v2", action="store_true")
+    parser.add_argument(
+        "--timing-v2",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="default: enabled when required by the policy adapter",
+    )
     parser.add_argument(
         "--solver-time-ms",
         type=float,
@@ -29,7 +40,7 @@ def parse_args():
         help="default: use the announcement lookahead window",
     )
     args = parser.parse_args()
-    if args.horizon < 1 or args.inference_delay_ms < 0:
+    if (args.horizon is not None and args.horizon < 1) or args.inference_delay_ms < 0:
         parser.error("invalid horizon or delay")
     return args
 

@@ -1166,6 +1166,22 @@ def test_future_behavior_version_is_rejected_before_optimizer_mutation():
         torch.testing.assert_close(value, before[key])
 
 
+def test_inference_policy_cannot_partially_restore_vtrace_learner():
+    learner = GamepadVTraceLearner(_config())
+    payload = learner.checkpoint()
+    payload.pop("optimizer")
+    payload["artifact_kind"] = "inference-policy"
+    before = {
+        key: value.detach().clone() for key, value in learner.model.state_dict().items()
+    }
+
+    with pytest.raises(ValueError, match="full training-state"):
+        learner.restore(payload)
+
+    for key, value in learner.model.state_dict().items():
+        torch.testing.assert_close(value, before[key])
+
+
 def test_shared_parameter_publication_is_coherent_and_versioned():
     config = _config()
     learner = GamepadVTraceLearner(config)

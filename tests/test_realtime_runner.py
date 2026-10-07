@@ -7,7 +7,13 @@ import runpy
 import sys
 from pathlib import Path
 
-from resnake_gym.realtime_runner import RealtimeRunOptions, run_realtime_policy
+import pytest
+
+from resnake_gym.realtime_runner import (
+    RealtimeRunOptions,
+    _resolve_policy_options,
+    run_realtime_policy,
+)
 
 ROOT = Path(__file__).parents[1]
 
@@ -93,3 +99,30 @@ def test_command_wrapper_only_maps_cli_to_runner(monkeypatch, tmp_path, capsys):
         solver_time_ms=7.5,
     )
     assert json.loads(capsys.readouterr().out) == {"valid_timeline": True}
+
+
+def test_policy_metadata_derives_realtime_timing_and_horizon():
+    class Policy:
+        chunk_length = 5
+        requires_timing_v2 = True
+
+    options = RealtimeRunOptions(output=Path("unused"), policy_spec="fixture:load")
+    resolved = _resolve_policy_options(options, Policy())
+
+    assert resolved.horizon == 5
+    assert resolved.timing_v2 is True
+
+    with pytest.raises(ValueError, match="horizon"):
+        _resolve_policy_options(
+            RealtimeRunOptions(
+                output=Path("unused"), policy_spec="fixture:load", horizon=8
+            ),
+            Policy(),
+        )
+    with pytest.raises(ValueError, match="timing-v2"):
+        _resolve_policy_options(
+            RealtimeRunOptions(
+                output=Path("unused"), policy_spec="fixture:load", timing_v2=False
+            ),
+            Policy(),
+        )

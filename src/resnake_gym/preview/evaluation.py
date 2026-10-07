@@ -258,7 +258,13 @@ def rollout_episode(
                 )
                 action = sample_policy_action(distribution, stochastic=False)
                 report = (
-                    reports_from_policy_action(distribution, action)[0].cpu().numpy()
+                    reports_from_policy_action(
+                        distribution,
+                        action,
+                        continuous_buttons=policy_config.chunk_rho is not None,
+                    )[0]
+                    .cpu()
+                    .numpy()
                 )
                 before = writer.frame_count
                 observation, _, terminated, truncated, info = env.step(report)
@@ -303,16 +309,23 @@ def rollout_episode(
                     if "received_transitions" in payload
                     else None
                 ),
+                "action_head": policy_config.action_head,
                 "action_encoding": payload.get("action_encoding"),
                 "training_objective": payload.get("training_objective"),
                 "checkpoint_format": payload.get("format"),
                 "collection_semantics": payload.get("collection_semantics"),
                 "recurrent_state": payload.get("recurrent_state"),
+                "recurrent_update": payload.get("recurrent_update"),
+                "replay_objective": payload.get("replay_objective"),
                 "credit_trace_max_transitions": getattr(
                     policy_config, "credit_trace_max_transitions", None
                 ),
                 "bptt_window": getattr(policy_config, "bptt_window", None),
-                "action_variables_per_decision": policy_config.chunk_length,
+                "action_variables_per_decision": (
+                    policy_config.chunk_length
+                    if policy_config.action_head == "dpad5"
+                    else None
+                ),
                 "seed": seed,
                 "mode": "deterministic",
                 "logic_fps": evaluation_config.logic_fps,

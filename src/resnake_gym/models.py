@@ -10,6 +10,41 @@ from torch.nn import functional as F
 
 import resnake_gym.gamepad as gamepad
 
+
+class _MarginalControlDistribution:
+    """Sample every control, but score only a causal prefix of them.
+
+    The controller report must stay complete, so sampling still delegates to the
+    full distribution.  ``log_prob`` and ``entropy`` instead describe its
+    marginal over the controls that can affect Snake.  The component
+    distributions used here are independent across controls (including
+    ``ChunkNormal``, whose correlation is only across chunk time), so dropping
+    the other per-control terms is the exact marginal rather than a heuristic
+    rescaling of the joint score.
+    """
+
+    def __init__(self, distribution, active_controls):
+        self.distribution = distribution
+        self.active_controls = active_controls
+
+    def _active_terms(self, terms):
+        if terms.shape[-1] < self.active_controls:
+            raise ValueError("distribution has fewer controls than its causal prefix")
+        mask = torch.arange(terms.shape[-1], device=terms.device)
+        return terms * (mask < self.active_controls).to(terms.dtype)
+
+    def log_prob(self, value):
+        return self._active_terms(self.distribution.log_prob(value))
+
+    def entropy(self):
+        return self._active_terms(self.distribution.entropy())
+
+    def __getattr__(self, name):
+        # Preserve the normal distribution API (sample, logits, loc, scale,
+        # batch_shape, ...), including full-size samples for the 20-D report.
+        return getattr(self.distribution, name)
+
+
 DPAD5_LABELS = gamepad.DPAD5_LABELS
 
 
@@ -25,6 +60,39 @@ def _dpad5_controls_with_gradient(logits):
     hard = F.one_hot(categories, num_classes=5).to(probabilities.dtype)
     one_hot = hard - probabilities.detach() + probabilities
     return one_hot @ _dpad5_templates(device=logits.device, dtype=logits.dtype)
+
+
+def normalized_controls(logits):
+    """Preserve autograd: soft buttons, four stick axes, two trigger axes."""
+    return torch.cat(
+        (
+            logits[..., :14].sigmoid(),
+            logits[..., 14:18].tanh(),
+            logits[..., 18:20].sigmoid(),
+        ),
+        dim=-1,
+    )
+
+
+def hard_controls_with_gradient(logits, *, temperature=1.0, stochastic=True):
+    """ST Gumbel-Softmax (Jang et al., ICLR 2017, section 2.2).
+
+    Forward buttons are binary, backward uses a biased continuous surrogate.
+    Do not mistake this for differentiating physical contacts or game rewards.
+    """
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    button_logits = logits[..., :14]
+    if stochastic:
+        pair = torch.stack((torch.zeros_like(button_logits), button_logits), -1)
+        buttons = F.gumbel_softmax(pair, tau=temperature, hard=True, dim=-1)[..., 1]
+    else:
+        soft = (button_logits / temperature).sigmoid()
+        hard = (button_logits >= 0).to(soft.dtype)
+        buttons = hard - soft.detach() + soft
+    return torch.cat(
+        (buttons, logits[..., 14:18].tanh(), logits[..., 18:20].sigmoid()), -1
+    )
 
 
 class HeadLocalEncoder(nn.Module):
@@ -125,9 +193,19 @@ class GamepadPolicy(nn.Module):
         time_features=False,
         decoder="parallel",
         spatial_pool=False,
+        chunk_rho=None,
+        action_head="dpad5",
     ):
         super().__init__()
+        if action_head not in ("raw", "dpad5"):
+            raise ValueError("action_head must be raw or dpad5")
+        if action_head == "dpad5" and chunk_rho is not None:
+            raise ValueError("chunk_rho is not supported by a dpad5 action head")
         self.chunk_length = chunk_length
+        self.chunk_rho = chunk_rho
+        self.action_head = action_head
+        if chunk_rho is not None:
+            self.button_log_std = nn.Parameter(torch.zeros(chunk_length, 14))
         self.encoder = HeadLocalEncoder(
             channels=channels, dim=dim, spatial_pool=spatial_pool
         )
@@ -151,9 +229,12 @@ class GamepadPolicy(nn.Module):
         self.feedback_memory = nn.GRUCell(21 if time_features else 20, dim)
         self.context = nn.Linear(dim + chunk_length * 20 + 1, dim)
         self.chunk_memory = nn.GRUCell(dim + 1, dim) if decoder == "gru" else None
-        actor_width = 5 if decoder == "gru" else chunk_length * 5
+        action_width = 20 if action_head == "raw" else 5
+        actor_width = action_width if decoder == "gru" else chunk_length * action_width
         self.actor = nn.Linear(dim, actor_width)
         self.critic = nn.Linear(dim, 1)
+        if action_head == "raw":
+            self.log_std = nn.Parameter(torch.full((chunk_length, 6), -1.0))
 
     def _state(
         self,
@@ -204,8 +285,9 @@ class GamepadPolicy(nn.Module):
         return hidden
 
     def _logits(self, hidden, target_dt):
+        action_width = 20 if self.action_head == "raw" else 5
         if self.decoder == "parallel":
-            return self.actor(hidden).reshape(-1, self.chunk_length, 5)
+            return self.actor(hidden).reshape(-1, self.chunk_length, action_width)
         if target_dt is None:
             raise ValueError("chunk decoder requires target time offsets")
         state, outputs = hidden, []
@@ -219,7 +301,10 @@ class GamepadPolicy(nn.Module):
     def forward(self, board, actual_report, timing, hidden=None, **context):
         hidden = self._state(board, actual_report, timing, hidden, **context)
         logits = self._logits(hidden, context.get("target_dt"))
-        report = _dpad5_controls_with_gradient(logits)
+        if self.action_head == "dpad5":
+            report = _dpad5_controls_with_gradient(logits)
+        else:
+            report = hard_controls_with_gradient(logits, stochastic=False)
         return (
             report,
             self.critic(hidden),
@@ -229,32 +314,90 @@ class GamepadPolicy(nn.Module):
     def distribution(self, board, actual_report, timing, hidden=None, **context):
         hidden = self._state(board, actual_report, timing, hidden, **context)
         mean = self._logits(hidden, context.get("target_dt"))
-        # Every command slot is an independent categorical D-pad choice.  It is
-        # converted to the public full [L, 20] controller-report tensor only at
-        # the environment boundary.
-        return (
-            torch.distributions.Categorical(logits=mean),
-            self.critic(hidden),
-            hidden,
-        )
+        if self.action_head == "dpad5":
+            # Each position in the command chunk is an independent choice from
+            # a fixed legal controller-report set.  This mapping never reads
+            # game state and performs no collision or reverse-action repair.
+            return (
+                torch.distributions.Categorical(logits=mean),
+                self.critic(hidden),
+                hidden,
+            )
+        buttons = torch.distributions.Bernoulli(logits=mean[..., :14])
+        axes = torch.distributions.Normal(mean[..., 14:], self.log_std.exp())
+        if self.chunk_rho is not None:
+            from resnake_gym.chunk_normal import ChunkNormal
+
+            buttons = ChunkNormal(
+                mean[..., :14], self.button_log_std.exp(), self.chunk_rho
+            )
+            axes = ChunkNormal(mean[..., 14:], self.log_std.exp(), self.chunk_rho)
+        # All 20 controls are sampled and remain available to downstream users,
+        # but Snake can only observe D-pad buttons and the two left-stick axes.
+        # PPO/SIL therefore score the exact marginal over those six controls;
+        # unrelated controller noise must not enter their ratios or entropy.
+        buttons = _MarginalControlDistribution(buttons, active_controls=4)
+        axes = _MarginalControlDistribution(axes, active_controls=2)
+        # Score-function RL uses the causal marginal and its axis latents.
+        # Reparameterized downstream training uses hard_controls_with_gradient.
+        # All six Gaussian latents must be transformed before device execution.
+        return (buttons, axes), self.critic(hidden), hidden
+
+
+def reports_from_samples(buttons, axis_latents, *, continuous_buttons=False):
+    """Fixed transforms; PPO ratios can be computed in latent space.
+
+    The parameter-independent transform Jacobian cancels between old/new
+    probabilities. Entropy of these latents is not physical-report entropy.
+    """
+    return torch.cat(
+        (
+            buttons.sigmoid() if continuous_buttons else buttons,
+            axis_latents[..., :4].tanh(),
+            axis_latents[..., 4:].sigmoid(),
+        ),
+        -1,
+    )
+
+
+def sample_log_prob(distributions, buttons, axis_latents):
+    button_dist, axis_dist = distributions
+    return button_dist.log_prob(buttons).sum((-1, -2)) + axis_dist.log_prob(
+        axis_latents
+    ).sum((-1, -2))
 
 
 def sample_policy_action(distribution, stochastic=True):
-    """Sample the categorical D-pad action for every command slot."""
-    return distribution.sample() if stochastic else distribution.logits.argmax(-1)
+    """Sample either policy head, retaining its exact score-function latent."""
+    if isinstance(distribution, torch.distributions.Categorical):
+        return distribution.sample() if stochastic else distribution.logits.argmax(-1)
+    button_dist, axis_dist = distribution
+    if stochastic:
+        return button_dist.sample(), axis_dist.sample()
+    buttons = (
+        (button_dist.probs >= 0.5).to(button_dist.probs.dtype)
+        if hasattr(button_dist, "probs")
+        else button_dist.loc
+    )
+    return buttons, axis_dist.loc
 
 
 def policy_action_log_prob(distribution, action):
     """Return one joint chunk log probability per batch element."""
-    return distribution.log_prob(action).sum(-1)
+    if isinstance(distribution, torch.distributions.Categorical):
+        return distribution.log_prob(action).sum(-1)
+    buttons, axis_latents = action
+    return sample_log_prob(distribution, buttons, axis_latents)
 
 
 def policy_action_entropy(distribution):
-    """Return one summed categorical-action entropy per batch element."""
-    return distribution.entropy().sum(-1)
+    """Return one summed latent-action entropy per batch element."""
+    if isinstance(distribution, torch.distributions.Categorical):
+        return distribution.entropy().sum(-1)
+    return sum(component.entropy().sum((-1, -2)) for component in distribution)
 
 
-def reports_from_policy_action(distribution, action):
+def reports_from_policy_action(distribution, action, *, continuous_buttons=False):
     """Map a score-function latent to the normalized 20-control report API."""
     if isinstance(distribution, torch.distributions.Categorical):
         if action.dtype.is_floating_point or action.dtype == torch.bool:
@@ -266,7 +409,10 @@ def reports_from_policy_action(distribution, action):
         )
         reports = templates[action]
         return reports
-    raise TypeError("policy distribution must be categorical")
+    buttons, axis_latents = action
+    return reports_from_samples(
+        buttons, axis_latents, continuous_buttons=continuous_buttons
+    )
 
 
 def policy_inputs(observation, device):

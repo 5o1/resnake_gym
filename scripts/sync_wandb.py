@@ -2,7 +2,7 @@
 
 Uses W&B custom step axes for delayed evaluation. Source event IDs permit
 deduplication against server history after a restart. Only metrics and explicit
-experiment configuration are uploaded, never checkpoints.
+experiment configuration are uploaded, never checkpoints or replay payloads.
 """
 
 import argparse
