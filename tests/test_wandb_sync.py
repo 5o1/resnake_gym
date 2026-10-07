@@ -280,6 +280,5 @@ def test_extracted_sync_runner_backfills_once_with_explicit_proxy(
     assert run.summary == {
         "synced_source_events": 1,
         "training_process_alive": False,
-        "evaluation_process_alive": False,
     }
     assert run.finished is True

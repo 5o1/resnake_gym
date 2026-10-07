@@ -30,7 +30,7 @@ def training_alive(pid, run):
         return None
     return process_command_matches(
         pid,
-        (b"train_gamepad_ppo.py", b"train_gamepad_vtrace.py"),
+        (b"train_gamepad_vtrace.py",),
         run,
     )
 

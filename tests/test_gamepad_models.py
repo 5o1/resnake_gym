@@ -2,7 +2,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from resnake_gym.models import GamepadPolicy, hard_controls_with_gradient  # noqa: E402
+from resnake_gym.models import GamepadPolicy  # noqa: E402
 
 
 @pytest.mark.parametrize("size", [(20, 31), (31, 20), (17, 43)])
@@ -34,26 +34,14 @@ def test_single_checkpoint_accepts_multiple_sizes():
         assert report.shape == (1, 8, 20)
 
 
-def test_stochastic_hard_forward_soft_backward():
-    logits = torch.zeros(4, 20, requires_grad=True)
-    report = hard_controls_with_gradient(logits)
-    assert ((report[:, :14] == 0) | (report[:, :14] == 1)).all()
-    report.sum().backward()
-    assert torch.isfinite(logits.grad).all()
-    assert (logits.grad.abs().sum(0) > 0).all()
-
-
-def test_score_function_distributions_are_mixed():
+def test_score_function_distribution_is_categorical_dpad5():
     model = GamepadPolicy(dim=16, chunk_length=2)
     board = torch.zeros(1, 9, 20, 31)
     board[:, 2, 10, 15] = 1
-    (buttons, axes), _, _ = model.distribution(
+    distribution, _, _ = model.distribution(
         board, torch.zeros(1, 20), torch.zeros(1, 3)
     )
-    assert buttons.sample().shape == (1, 2, 14)
-    assert axes.sample().shape == (1, 2, 6)
-    loss = -(
-        buttons.log_prob(buttons.sample()).sum() + axes.log_prob(axes.sample()).sum()
-    )
+    assert distribution.sample().shape == (1, 2)
+    loss = -distribution.log_prob(distribution.sample()).sum()
     loss.backward()
     assert model.actor.weight.grad.abs().sum() > 0

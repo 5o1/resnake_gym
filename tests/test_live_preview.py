@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import time
-from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -243,78 +242,7 @@ def test_normalized_event_stream_has_causal_order():
     assert events[-1]["truncated"] is True
 
 
-def test_rollout_is_one_complete_real_episode(tmp_path):
-    torch = pytest.importorskip("torch")
-    module = preview_module()
-    from resnake_gym.gamepad_ppo import (
-        CHECKPOINT_FORMAT,
-        COLLECTION_SEMANTICS_VERSION,
-        RECURRENT_UPDATE_VERSION,
-        REPLAY_OBJECTIVE_VERSION,
-        TRAINING_OBJECTIVE_VERSION,
-        PPOConfig,
-        build_model,
-    )
-
-    config = PPOConfig(
-        max_logic_steps=3,
-        dim=16,
-        decision_min=2,
-        decision_max=2,
-        perturbation_min=100,
-        perturbation_max=100,
-    )
-    policy = tmp_path / "policy-000010.pt"
-    torch.save(
-        {
-            "format": CHECKPOINT_FORMAT,
-            "training_objective": TRAINING_OBJECTIVE_VERSION,
-            "collection_semantics": COLLECTION_SEMANTICS_VERSION,
-            "recurrent_update": RECURRENT_UPDATE_VERSION,
-            "replay_objective": REPLAY_OBJECTIVE_VERSION,
-            "config": asdict(config),
-            "model": build_model(config).state_dict(),
-            "policy_version": 17,
-            "logic_ticks": 123,
-        },
-        policy,
-    )
-    protocol = module.evaluation_protocol(config, 730000)
-    protocol_sha = module.protocol_fingerprint(protocol)
-    checkpoint_sha = module.sha256_file(policy)
-    episode, writer = module.rollout_episode(
-        policy,
-        10,
-        730000,
-        "cpu",
-        config,
-        tmp_path,
-        checkpoint_sha,
-        protocol,
-        protocol_sha,
-        2,
-        1_000_000,
-    )
-    assert episode["episode_ticks"] == 3
-    assert episode["frame_count"] == 4
-    assert episode["termination"] == "time_limit"
-    assert episode["truncated"] is True
-    assert episode["won"] is False
-    assert "episodes" not in episode and "segment_ticks" not in episode
-    assert [event["type"] for event in episode["events"]] == [
-        "game_start",
-        "game_end",
-    ]
-    manifest = module.publish_episode(tmp_path, episode, writer, 2, 1_000_000)
-    metadata = json.loads((tmp_path / manifest["clips"][0]["url"]).read_text())
-    decoded = decode_episode(module, tmp_path, metadata)
-    assert [value["episode_tick"] for value in decoded] == [0, 1, 2, 3]
-    assert decoded[-1]["truncated"] is True
-    assert decoded[-1]["terminated"] is False
-
-
-@pytest.mark.parametrize("action_head", ["dpad5", "held_dpad5"])
-def test_vtrace_checkpoint_loads_for_preview(tmp_path, action_head):
+def test_vtrace_checkpoint_loads_for_preview(tmp_path):
     torch = pytest.importorskip("torch")
     module = preview_module()
     from resnake_gym.gamepad_vtrace import GamepadVTraceLearner, VTraceConfig
@@ -332,10 +260,6 @@ def test_vtrace_checkpoint_loads_for_preview(tmp_path, action_head):
         recurrent_burn_in=2,
         batch_min_transitions=2,
         batch_max_transitions=2,
-        replay_capacity=8,
-        replay_batch_fragments=1,
-        replay_warmup_fragments=1,
-        action_head=action_head,
     )
     learner = GamepadVTraceLearner(config)
     payload = learner.checkpoint()
@@ -349,7 +273,6 @@ def test_vtrace_checkpoint_loads_for_preview(tmp_path, action_head):
     assert metadata["format"] == "gamepad-vtrace-v3"
     assert loaded_config == config
     assert model_config == config
-    assert model.action_head == action_head
 
     protocol = module.evaluation_protocol(config, 731000)
     protocol_sha = module.protocol_fingerprint(protocol)
@@ -371,7 +294,6 @@ def test_vtrace_checkpoint_loads_for_preview(tmp_path, action_head):
         assert episode["frame_count"] == 4
         assert episode["termination"] == "time_limit"
         assert episode["truncated"] is True
-        assert episode["action_head"] == action_head
         assert episode["action_encoding"] == metadata["action_encoding"]
         assert episode["training_objective"] == metadata["training_objective"]
         assert episode["checkpoint_format"] == "gamepad-vtrace-v3"
@@ -379,9 +301,7 @@ def test_vtrace_checkpoint_loads_for_preview(tmp_path, action_head):
         assert episode["recurrent_state"] == metadata["recurrent_state"]
         assert episode["credit_trace_max_transitions"] == 2048
         assert episode["bptt_window"] == 128
-        assert episode["action_variables_per_decision"] == (
-            1 if action_head == "held_dpad5" else config.chunk_length
-        )
+        assert episode["action_variables_per_decision"] == config.chunk_length
     finally:
         writer.rollback()
 

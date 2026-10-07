@@ -48,12 +48,6 @@ from resnake_gym.gamepad_vtrace_contract import (
     FRAGMENT_FORMAT as FRAGMENT_FORMAT,
 )
 from resnake_gym.gamepad_vtrace_contract import (
-    HELD_ACTION_ENCODING as HELD_ACTION_ENCODING,
-)
-from resnake_gym.gamepad_vtrace_contract import (
-    HELD_TRAINING_OBJECTIVE_VERSION as HELD_TRAINING_OBJECTIVE_VERSION,
-)
-from resnake_gym.gamepad_vtrace_contract import (
     RECURRENT_STATE_VERSION as RECURRENT_STATE_VERSION,
 )
 from resnake_gym.gamepad_vtrace_contract import (
@@ -61,12 +55,6 @@ from resnake_gym.gamepad_vtrace_contract import (
 )
 from resnake_gym.gamepad_vtrace_contract import (
     VTraceConfig as VTraceConfig,
-)
-from resnake_gym.gamepad_vtrace_contract import (
-    _action_variable_count as _action_variable_count,
-)
-from resnake_gym.gamepad_vtrace_contract import (
-    action_semantics as action_semantics,
 )
 from resnake_gym.gamepad_vtrace_contract import (
     checkpoint_metadata as checkpoint_metadata,
@@ -104,24 +92,6 @@ from resnake_gym.gamepad_vtrace_fragments import (
 from resnake_gym.gamepad_vtrace_learner import (
     GamepadVTraceLearner as GamepadVTraceLearner,
 )
-from resnake_gym.gamepad_vtrace_learner import (
-    _importance_effective_sample_size as _importance_effective_sample_size,
-)
-from resnake_gym.gamepad_vtrace_learner import (
-    _sequence_loss_weights as _sequence_loss_weights,
-)
-
-
-def __getattr__(name: str):
-    """Resolve the pre-refactor replay import without advertising it as API."""
-    if name == "ProgressFragmentReplay":
-        from resnake_gym.experimental.gamepad_vtrace_replay import (
-            ProgressFragmentReplay,
-        )
-
-        return ProgressFragmentReplay
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 __all__ = [
     "ACTION_ENCODING",
@@ -133,13 +103,9 @@ __all__ = [
     "FRAGMENT_FORMAT",
     "GamepadVTraceLearner",
     "RECURRENT_STATE_VERSION",
-    "HELD_ACTION_ENCODING",
-    "HELD_TRAINING_OBJECTIVE_VERSION",
     "TRAINING_OBJECTIVE_VERSION",
     "VTraceConfig",
-    "_sequence_loss_weights",
     "actor_worker",
-    "action_semantics",
     "checkpoint_metadata",
     "collect_fresh_credit_traces",
     "load_published_parameters",

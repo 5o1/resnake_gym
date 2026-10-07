@@ -12,7 +12,7 @@ from gymnasium.utils.env_checker import check_env
 import resnake_gym  # noqa: F401 - importing the package registers the environment
 from resnake_gym.envs import SnakeEnv
 
-ENV_ID = "resnake_gym/ReSnake-v0"
+ENV_ID = "resnake_gym/ReSnake-v1"
 
 UP = 0
 RIGHT = 1

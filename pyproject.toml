@@ -17,10 +17,6 @@ dependencies = [
 [project.optional-dependencies]
 render = ["pygame-ce>=2.5"]
 rl = [
-    "imageio-ffmpeg==0.6.0",
-    "sb3-contrib==2.9.0",
-    "stable-baselines3==2.9.0",
-    "tensorboard==2.21.0",
     "torch>=2.14.1,<2.15",
 ]
 dev = [

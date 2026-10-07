@@ -58,58 +58,17 @@ def _modules_loaded_by(module: str) -> set[str]:
     return set(json.loads(result.stdout))
 
 
-def test_vtrace_facade_does_not_import_the_ppo_trainer():
+def test_vtrace_facade_loads_the_shared_runtime():
     loaded = _modules_loaded_by("resnake_gym.gamepad_vtrace")
 
-    assert "resnake_gym.gamepad_ppo" not in loaded
     assert "resnake_gym.gamepad_runtime" in loaded
-    assert "resnake_gym.experimental.progress_replay" not in loaded
 
 
-def test_root_package_does_not_eagerly_load_historical_wrappers():
-    loaded = _modules_loaded_by("resnake_gym")
-
-    assert not any(name.startswith("resnake_gym_legacy") for name in loaded)
-    assert "resnake_gym.wrappers.chunked_control" not in loaded
-    assert "resnake_gym.wrappers.distance_reward" not in loaded
-
-
-def test_historical_wrapper_modules_remain_thin_compatibility_aliases():
-    chunked = importlib.import_module("resnake_gym.wrappers.chunked_control")
-    chunked_implementation = importlib.import_module(
-        "resnake_gym_legacy.relative_chunked.chunked_control"
-    )
-    reward = importlib.import_module("resnake_gym.wrappers.distance_reward")
-    reward_implementation = importlib.import_module(
-        "resnake_gym_legacy.v0.distance_reward"
-    )
-
-    assert chunked.ChunkedControlWrapper is chunked_implementation.ChunkedControlWrapper
-    assert reward.DistanceRewardWrapper is reward_implementation.DistanceRewardWrapper
-
-
-def test_checkpoint_loader_depends_on_contracts_not_trainers():
+def test_checkpoint_loader_depends_on_the_vtrace_contract_not_facade():
     loaded = _modules_loaded_by("resnake_gym.policy_checkpoint")
 
-    assert "resnake_gym.gamepad_ppo" not in loaded
     assert "resnake_gym.gamepad_vtrace" not in loaded
-    assert "resnake_gym.gamepad_ppo_contract" in loaded
     assert "resnake_gym.gamepad_vtrace_contract" in loaded
-
-
-def test_experimental_replay_is_not_advertised_by_the_vtrace_facade():
-    code = (
-        "import json, resnake_gym.gamepad_vtrace as module; "
-        "print(json.dumps(module.__all__))"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    assert "ProgressFragmentReplay" not in json.loads(result.stdout)
 
 
 def test_internal_modules_do_not_import_through_the_root_package_facade():

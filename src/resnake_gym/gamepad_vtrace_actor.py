@@ -146,7 +146,6 @@ def _new_actor_buffer(runtime: _ActorRuntime, env_id: int) -> dict[str, Any]:
         episode_id=runtime.episode_ids[env_id],
         initial_hidden=runtime.hidden[env_id],
         score=runtime.episode_scores[env_id],
-        action_head=runtime.config.action_head,
         burn_context=runtime.contexts[env_id],
         run_generation=runtime.run_generation,
         fragment_sequence=runtime.fragment_sequences[env_id],

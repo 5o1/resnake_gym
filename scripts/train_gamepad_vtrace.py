@@ -72,15 +72,6 @@ def _parse_args():
     parser.add_argument("--death-cost", type=float, default=3.0)
     parser.add_argument("--solver-ms", type=float, default=50.0)
     parser.add_argument("--decoder", choices=["parallel", "gru"], default="parallel")
-    parser.add_argument(
-        "--action-head",
-        choices=["dpad5", "held_dpad5"],
-        default="dpad5",
-        help=(
-            "dpad5 samples every chunk slot independently; held_dpad5 samples "
-            "one category and repeats its full report across the chunk"
-        ),
-    )
     parser.add_argument("--no-spatial-pool", action="store_true")
     args = parser.parse_args()
     if args.updates < 1 or args.save_every < 1 or args.threads < 1:

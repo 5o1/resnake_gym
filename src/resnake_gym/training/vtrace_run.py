@@ -66,7 +66,6 @@ VTRACE_CONFIG_ARGUMENT_FIELDS = (
     "death_cost",
     "solver_ms",
     "decoder",
-    "action_head",
     "seed",
 )
 
@@ -136,7 +135,6 @@ def build_run_metadata(
         "rule_teacher": False,
         "state_dependent_action_mask": False,
         "fresh_fifo_discards": False,
-        "fragment_replay_training_enabled": False,
         "runtime_state_checkpointed": True,
         "credit_assembler_checkpointed": True,
         "resume": str(options.resume) if options.resume else None,
@@ -161,15 +159,10 @@ def _restore_assembler(
     *,
     max_fresh_logic_ticks: int | None,
 ) -> None:
-    runtime_checkpoint_id = resume_payload.get(
-        "runtime_checkpoint_id",
-        resume_payload.get("replay_checkpoint_id"),
-    )
+    runtime_checkpoint_id = resume_payload.get("runtime_checkpoint_id")
     if not isinstance(runtime_checkpoint_id, str) or not runtime_checkpoint_id:
         raise ValueError("V-trace checkpoint has no runtime snapshot identity")
     # Runtime sidecars are local trusted artifacts and contain NumPy arrays.
-    # Legacy replay sidecars remain readable, but only their assembler state
-    # is restored; isolated fragment replay is not part of this algorithm.
     runtime_state = load_matching_runtime(resume, runtime_checkpoint_id)
     try:
         assembler.load_state_dict(runtime_state["credit_assembler"])
@@ -276,7 +269,7 @@ def run_vtrace_iteration(
     """Collect, optimize, publish, account, and report one fresh batch."""
     before = time.monotonic()
     traces, raw_collection = actor_pool.collect(state.assembler)
-    fresh_metrics = state.learner.update(traces, source="fresh")
+    fresh_metrics = state.learner.update(traces)
     for trace in traces:
         if trace["score_end"] > state.metrics.best_score:
             state.metrics.best_score = int(trace["score_end"])

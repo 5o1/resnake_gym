@@ -16,16 +16,13 @@ import numpy as np
 
 @dataclass
 class ActionExecutionAudit:
-    action_head: str
     chunk_length: int
     transition_count: int = 0
     slot_executed: np.ndarray = field(init=False)
     slot_opportunities: np.ndarray = field(init=False)
     zero_current_source: int = 0
-    j8_unexecuted_chosen_nll: float = 0.0
-    j8_total_chosen_nll: float = 0.0
-    held_zero_execution_chosen_nll: float = 0.0
-    held_total_chosen_nll: float = 0.0
+    unexecuted_chosen_nll: float = 0.0
+    total_chosen_nll: float = 0.0
     executed_ticks: int = 0
     executed_neutral_ticks: int = 0
     fallback_ticks: int = 0
@@ -35,8 +32,6 @@ class ActionExecutionAudit:
     current_source_comparisons: int = 0
 
     def __post_init__(self) -> None:
-        if self.action_head not in ("dpad5", "held_dpad5"):
-            raise ValueError("action audit requires dpad5 or held_dpad5")
         if type(self.chunk_length) is not int or self.chunk_length < 1:
             raise ValueError("chunk_length must be a positive int")
         self.slot_executed = np.zeros(self.chunk_length, dtype=np.int64)
@@ -44,8 +39,6 @@ class ActionExecutionAudit:
 
     def add_fragment(self, fragment: dict[str, Any]) -> None:
         """Accumulate one validated fragment exactly once at receipt time."""
-        if fragment.get("action_head") != self.action_head:
-            raise ValueError("fragment action head does not match action audit")
         requested = np.asarray(fragment["requested_reports"])
         if requested.ndim != 3 or requested.shape[1:] != (self.chunk_length, 20):
             raise ValueError("requested report shape does not match action audit")
@@ -55,16 +48,10 @@ class ActionExecutionAudit:
 
         actions = np.asarray(fragment["policy_actions"])
         slot_log_probs = np.asarray(fragment["behavior_slot_log_probs"])
-        if self.action_head == "dpad5":
-            if actions.shape != (length, self.chunk_length):
-                raise ValueError("J8 policy action shape is invalid")
-            if slot_log_probs.shape != (length, self.chunk_length, 5):
-                raise ValueError("J8 behavior distribution shape is invalid")
-        else:
-            if actions.shape != (length,):
-                raise ValueError("H1 policy action shape is invalid")
-            if slot_log_probs.shape != (length, 1, 5):
-                raise ValueError("H1 behavior distribution shape is invalid")
+        if actions.shape != (length, self.chunk_length):
+            raise ValueError("dpad5 policy action shape is invalid")
+        if slot_log_probs.shape != (length, self.chunk_length, 5):
+            raise ValueError("dpad5 behavior distribution shape is invalid")
 
         neutral = np.zeros(20, dtype=requested.dtype)
         for index in range(length):
@@ -107,22 +94,14 @@ class ActionExecutionAudit:
             self.slot_executed += current_slots
             zero_current = not bool(current_slots.any())
             self.zero_current_source += int(zero_current)
-            if self.action_head == "dpad5":
-                chosen = actions[index, :, None]
-                chosen_nll = -np.take_along_axis(
-                    slot_log_probs[index], chosen, axis=-1
-                )[:, 0]
-                if not np.isfinite(chosen_nll).all() or np.any(chosen_nll < 0):
-                    raise ValueError("J8 chosen negative log probability is invalid")
-                self.j8_total_chosen_nll += float(chosen_nll.sum())
-                self.j8_unexecuted_chosen_nll += float(chosen_nll[~current_slots].sum())
-            else:
-                chosen_nll = -float(slot_log_probs[index, 0, int(actions[index])])
-                if not np.isfinite(chosen_nll) or chosen_nll < 0:
-                    raise ValueError("H1 chosen negative log probability is invalid")
-                self.held_total_chosen_nll += chosen_nll
-                if zero_current:
-                    self.held_zero_execution_chosen_nll += chosen_nll
+            chosen = actions[index, :, None]
+            chosen_nll = -np.take_along_axis(slot_log_probs[index], chosen, axis=-1)[
+                :, 0
+            ]
+            if not np.isfinite(chosen_nll).all() or np.any(chosen_nll < 0):
+                raise ValueError("dpad5 chosen negative log probability is invalid")
+            self.total_chosen_nll += float(chosen_nll.sum())
+            self.unexecuted_chosen_nll += float(chosen_nll[~current_slots].sum())
 
     @staticmethod
     def _rate(
@@ -190,18 +169,10 @@ class ActionExecutionAudit:
             self.current_source_matches,
             self.current_source_comparisons,
         )
-        if self.action_head == "dpad5":
-            self._fraction(
-                result,
-                f"{prefix}j8_unexecuted_chosen_nll",
-                self.j8_unexecuted_chosen_nll,
-                self.j8_total_chosen_nll,
-            )
-        else:
-            self._fraction(
-                result,
-                f"{prefix}h1_zero_execution_chosen_nll",
-                self.held_zero_execution_chosen_nll,
-                self.held_total_chosen_nll,
-            )
+        self._fraction(
+            result,
+            f"{prefix}unexecuted_chosen_nll",
+            self.unexecuted_chosen_nll,
+            self.total_chosen_nll,
+        )
         return result

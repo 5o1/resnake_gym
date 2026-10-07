@@ -35,7 +35,7 @@ class FakeAssembler:
         return {"format": "assembler-fixture", "pending": []}
 
 
-def test_checkpoint_uses_runtime_sidecar_without_fragment_replay(tmp_path):
+def test_checkpoint_uses_matched_runtime_sidecar(tmp_path):
     checkpoint_id = save_checkpoint(
         FakeLearner(),
         FakeAssembler(),
@@ -50,7 +50,6 @@ def test_checkpoint_uses_runtime_sidecar_without_fragment_replay(tmp_path):
     policy = torch.load(tmp_path / "policy-000004.pt", weights_only=True)
 
     assert checkpoint["runtime_checkpoint_id"] == checkpoint_id
-    assert "replay_checkpoint_id" not in checkpoint
     assert runtime["format"] == RUNTIME_STATE_FORMAT
     assert runtime["checkpoint_id"] == checkpoint_id
     assert set(runtime) == {
@@ -63,20 +62,6 @@ def test_checkpoint_uses_runtime_sidecar_without_fragment_replay(tmp_path):
     }
     assert "optimizer" not in policy
     assert load_matching_runtime(tmp_path / "checkpoint.pt", checkpoint_id) == runtime
-
-
-def test_runtime_loader_accepts_legacy_replay_sidecar_for_resume(tmp_path):
-    legacy = {
-        "format": "gamepad-vtrace-progress-fragments-v2",
-        "checkpoint_id": "legacy-id",
-        "credit_assembler": {"format": "legacy-assembler"},
-        "payloads": {1: object()},
-    }
-    torch.save(legacy, tmp_path / "replay.pt")
-
-    restored = load_matching_runtime(tmp_path / "checkpoint.pt", "legacy-id")
-
-    assert restored["credit_assembler"] == {"format": "legacy-assembler"}
 
 
 def test_checkpoint_rejects_broken_credit_accounting():

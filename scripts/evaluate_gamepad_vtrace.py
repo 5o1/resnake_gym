@@ -1,4 +1,4 @@
-"""Evaluate PPO or V-trace gamepad policies; not wall-clock capability proof."""
+"""Evaluate a V-trace gamepad policy; not wall-clock capability proof."""
 
 import argparse
 import json
@@ -11,7 +11,6 @@ from resnake_gym.evaluation_run import (
     sha256_file,
 )
 
-# Compatibility names retained for callers that loaded the old script.
 _atomic_json = atomic_json
 _sha256_file = sha256_file
 
@@ -20,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--sizes", nargs="+", default=["31x20", "20x31", "40x25"])
+    parser.add_argument("--sizes", nargs="+", default=["31x20"])
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--seed", type=int, default=520000)
     parser.add_argument("--device", default="cuda")

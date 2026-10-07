@@ -17,16 +17,11 @@ if ENV_ID not in registry:
         entry_point="resnake_gym.envs.gamepad_env:GamepadSnakeEnv",
     )
 
-
-# Frozen for reproducing historical experiments, not for new training.
-if "resnake_gym/ReSnake-v0" not in registry:
-    register(id="resnake_gym/ReSnake-v0", entry_point="resnake_gym.envs:SnakeEnv")
-
 from resnake_gym.envs import (  # noqa: E402 -- register IDs before public imports
     GamepadSnakeEnv,
-    LegacySnakeEnv,
     PerturbedGamepadEnv,
     RewardGamepadEnv,
+    SnakeEnv,
     SnakeState,
 )
 from resnake_gym.wrappers import AsyncGamepad  # noqa: E402
@@ -35,9 +30,9 @@ __all__ = [
     "AsyncGamepad",
     "ENV_ID",
     "GamepadSnakeEnv",
-    "LegacySnakeEnv",
     "PERTURBED_ENV_ID",
     "PerturbedGamepadEnv",
     "RewardGamepadEnv",
+    "SnakeEnv",
     "SnakeState",
 ]

@@ -2,7 +2,7 @@
 
 Uses W&B custom step axes for delayed evaluation. Source event IDs permit
 deduplication against server history after a restart. Only metrics and explicit
-experiment configuration are uploaded, never checkpoints or replay files.
+experiment configuration are uploaded, never checkpoints.
 """
 
 import argparse
@@ -18,7 +18,6 @@ from resnake_gym.analysis.wandb_events import (
 from resnake_gym.analysis.wandb_sync import (
     WandbSyncOptions,
     alive,
-    evaluation_alive,
     sync_wandb,
 )
 from resnake_gym.analysis.wandb_sync import wait_for_metadata as _wait_for_metadata
@@ -26,7 +25,6 @@ from resnake_gym.analysis.wandb_sync import wait_for_metadata as _wait_for_metad
 __all__ = [
     "alive",
     "episode_scalars",
-    "evaluation_alive",
     "events",
     "main",
     "percentile",
@@ -54,7 +52,6 @@ def main():
     parser.add_argument("--entity", required=True)
     parser.add_argument("--project", required=True)
     parser.add_argument("--training-pid", type=int)
-    parser.add_argument("--evaluation-pid", type=int)
     parser.add_argument("--proxy", default="http://127.0.0.1:17891")
     args = parser.parse_args()
     sync_wandb(
@@ -63,7 +60,6 @@ def main():
             entity=args.entity,
             project=args.project,
             training_pid=args.training_pid,
-            evaluation_pid=args.evaluation_pid,
             proxy=args.proxy,
         )
     )

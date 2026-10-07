@@ -74,10 +74,10 @@ def save_checkpoint(
 ) -> str:
     """Publish a matched learner/runtime pair with atomic rename boundaries.
 
-    Fragment replay is not part of the current algorithm.  The sidecar stores
-    only assembler state needed to conserve already received experience.  This
-    protects process-level interruption; it is not a power-loss durability
-    guarantee because the files and directory are not explicitly fsynced.
+    The sidecar stores assembler state needed to conserve already received
+    experience. This protects process-level interruption; it is not a power-loss
+    durability guarantee because the files and directory are not explicitly
+    fsynced.
     """
     assert_credit_accounting(learner, assembler)
     checkpoint_id = (
@@ -134,15 +134,9 @@ def save_checkpoint(
 def load_matching_runtime(
     resume_checkpoint: Path, checkpoint_id: str
 ) -> dict[str, Any]:
-    """Load the matching assembler sidecar, including legacy replay sidecars."""
+    """Load the assembler sidecar matching a learner checkpoint."""
     checked = []
-    candidates = (
-        ("runtime.pt", True),
-        ("runtime.previous.pt", True),
-        ("replay.pt", False),
-        ("replay.previous.pt", False),
-    )
-    for name, current in candidates:
+    for name in ("runtime.pt", "runtime.previous.pt"):
         path = resume_checkpoint.parent / name
         if not path.exists():
             continue
@@ -150,7 +144,7 @@ def load_matching_runtime(
         checked.append((name, state.get("checkpoint_id")))
         if state.get("checkpoint_id") != checkpoint_id:
             continue
-        if current and state.get("format") != RUNTIME_STATE_FORMAT:
+        if state.get("format") != RUNTIME_STATE_FORMAT:
             raise ValueError("V-trace runtime state format mismatch")
         if not isinstance(state.get("credit_assembler"), dict):
             raise ValueError("V-trace runtime has no credit assembler state")

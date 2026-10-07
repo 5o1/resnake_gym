@@ -8,7 +8,6 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from resnake_gym.experimental import ProgressFragmentReplay  # noqa: E402
 from resnake_gym.gamepad_runtime import make_env, stack_observations  # noqa: E402
 from resnake_gym.gamepad_vtrace import (  # noqa: E402
     CreditTraceAssembler,
@@ -16,10 +15,8 @@ from resnake_gym.gamepad_vtrace import (  # noqa: E402
     VTraceConfig,
     _append_transition,
     _finish_fragment,
-    _importance_effective_sample_size,
     _make_credit_trace,
     _new_buffer,
-    _sequence_loss_weights,
     actor_worker,
     checkpoint_metadata,
     collect_fresh_credit_traces,
@@ -35,6 +32,9 @@ from resnake_gym.models import (  # noqa: E402
     policy_action_log_prob,
     reports_from_policy_action,
     sample_policy_action,
+)
+from resnake_gym.training.vtrace_learner_audit import (  # noqa: E402
+    importance_effective_sample_size,
 )
 from resnake_gym.vtrace import vtrace_from_log_probs  # noqa: E402
 
@@ -126,9 +126,6 @@ def _config(**updates):
         batch_max_transitions=4,
         batch_food_target=0,
         queue_capacity=4,
-        replay_capacity=8,
-        replay_batch_fragments=2,
-        replay_warmup_fragments=1,
     )
     values.update(updates)
     return VTraceConfig(**values)
@@ -146,7 +143,6 @@ def _collect_fragment(learner, length, *, max_logic_steps=100, version=0):
         episode_id=0,
         initial_hidden=hidden[0],
         score=0,
-        action_head=config.action_head,
     )
     info = None
     try:
@@ -333,48 +329,19 @@ def _constant_one_step_stream(template, count):
     return fragments
 
 
-def test_vtrace_config_enforces_event_bounds_and_structured_action():
+def test_vtrace_config_enforces_event_bounds():
     with pytest.raises(ValueError, match="hard limit"):
         _config(batch_min_transitions=5, batch_max_transitions=4)
-    with pytest.raises(ValueError, match="dpad5"):
-        _config(action_head="raw")
-    with pytest.raises(ValueError, match="event/progress fractions"):
-        _config(replay_event_fraction=0.1, replay_high_progress_fraction=0.2)
     with pytest.raises(ValueError, match="burn_in"):
         _config(recurrent_burn_in=3, unroll_length=2)
-    with pytest.raises(ValueError, match="warmup"):
-        _config(replay_warmup_fragments=9, replay_capacity=8)
     with pytest.raises(ValueError, match="initial_length"):
         _config(width=4, initial_length=5)
-
-
-def test_legacy_replay_constructor_values_remain_readable_but_unserialized():
-    config = _config(
-        replay_capacity=7,
-        replay_retention="fifo",
-        replay_batch_fragments=3,
-        replay_warmup_fragments=2,
-        replay_event_fraction=0.75,
-        replay_high_progress_fraction=0.25,
-        replay_is_beta=0.6,
-    )
-
-    assert config.replay_capacity == 7
-    assert config.replay_retention == "fifo"
-    assert config.replay_batches_per_update == 0
-    assert config.replay_batch_fragments == 3
-    assert config.replay_warmup_fragments == 2
-    assert config.replay_event_fraction == 0.75
-    assert config.replay_high_progress_fraction == 0.25
-    assert config.replay_is_beta == 0.6
-    assert not any(key.startswith("replay_") for key in asdict(config))
 
 
 def test_v3_checkpoint_and_fragment_formats_reject_old_credit_ambiguous_data():
     config = _config()
     learner = GamepadVTraceLearner(config)
     checkpoint = checkpoint_metadata(config)
-    assert not any(key.startswith("replay_") for key in checkpoint["config"])
     old_checkpoint = copy.deepcopy(checkpoint)
     old_checkpoint["format"] = "gamepad-vtrace-v2"
     with pytest.raises(ValueError, match="format mismatch"):
@@ -1029,87 +996,18 @@ def test_mixed_fragment_policy_versions_keep_per_transition_behavior_probabiliti
     assert metrics["rho_mean"] == pytest.approx(1.0, abs=1e-5)
 
 
-def test_held_action_fragment_has_one_probability_variable_and_full_held_report():
-    config = _config(action_head="held_dpad5")
-    learner = GamepadVTraceLearner(config)
-    fragment = _collect_fragment(learner, 2)
-
-    assert fragment["action_head"] == "held_dpad5"
-    assert fragment["action_variables_per_decision"] == 1
-    assert fragment["policy_actions"].shape == (fragment["length"],)
-    assert fragment["behavior_slot_log_probs"].shape == (
-        fragment["length"],
-        1,
-        5,
-    )
-    assert fragment["requested_reports"].shape == (
-        fragment["length"],
-        config.chunk_length,
-        20,
-    )
-    np.testing.assert_array_equal(
-        fragment["requested_reports"],
-        np.repeat(fragment["requested_reports"][:, :1], config.chunk_length, axis=1),
-    )
-    chosen = np.take_along_axis(
-        fragment["behavior_slot_log_probs"],
-        fragment["policy_actions"][:, None, None],
-        axis=-1,
-    )[:, 0, 0]
-    np.testing.assert_allclose(chosen, fragment["behavior_log_probs"], atol=1e-6)
-
-    metrics = learner.update([_as_trace(fragment, config)])
-
-    assert metrics["rho_mean"] == pytest.approx(1.0, abs=1e-5)
-    assert metrics["behavior_target_joint_kl_mean"] == pytest.approx(0.0, abs=1e-5)
-    assert np.isfinite(metrics["loss"])
-
-
-def test_held_and_independent_slot_checkpoint_semantics_are_strictly_separate():
-    independent = checkpoint_metadata(_config(action_head="dpad5"))
-    held = checkpoint_metadata(_config(action_head="held_dpad5"))
-
-    assert independent["format"] == held["format"]
-    assert independent["training_objective"] != held["training_objective"]
-    assert independent["action_encoding"] != held["action_encoding"]
-    validate_checkpoint(independent)
-    validate_checkpoint(held)
-
-    corrupted = copy.deepcopy(held)
-    corrupted["action_encoding"] = independent["action_encoding"]
-    with pytest.raises(ValueError, match="action_encoding"):
-        validate_checkpoint(corrupted)
-
-    held_checkpoint = GamepadVTraceLearner(
-        _config(action_head="held_dpad5")
-    ).checkpoint()
-    with pytest.raises(ValueError, match="resume config mismatch: action_head"):
-        GamepadVTraceLearner(_config(action_head="dpad5")).restore(held_checkpoint)
-
-    held_fragment = _collect_fragment(
-        GamepadVTraceLearner(_config(action_head="held_dpad5")), 1
-    )
-    with pytest.raises(ValueError, match="action head"):
-        validate_fragment(held_fragment, _config(action_head="dpad5"))
-
-
-@pytest.mark.parametrize(
-    ("action_head", "variables"), (("dpad5", 8), ("held_dpad5", 1))
-)
-def test_entropy_metrics_are_explicitly_comparable_across_action_heads(
-    action_head, variables
-):
-    config = _config(action_head=action_head, entropy_coefficient=0.008)
+def test_entropy_metrics_use_one_variable_per_dpad_chunk_slot():
+    config = _config(entropy_coefficient=0.008)
     learner = GamepadVTraceLearner(config)
     fragment = _collect_fragment(learner, 1)
 
     metrics = learner.update([_as_trace(fragment, config)])
 
     assert metrics["entropy_joint_nats"] == pytest.approx(metrics["latent_entropy"])
-    assert metrics["entropy_action_variables_per_decision"] == variables
-    assert metrics["entropy_per_action_variable_nats"] * variables == pytest.approx(
-        metrics["entropy_joint_nats"]
-    )
+    assert metrics["entropy_action_variables_per_decision"] == config.chunk_length
+    assert metrics[
+        "entropy_per_action_variable_nats"
+    ] * config.chunk_length == pytest.approx(metrics["entropy_joint_nats"])
     assert metrics["entropy_normalized_fraction"] == pytest.approx(
         metrics["entropy_per_action_variable_nats"] / np.log(5.0)
     )
@@ -1153,92 +1051,17 @@ def test_truncation_bootstraps_its_final_observation_without_crossing_reset():
     assert float(result.vs[0, 0]) == pytest.approx(expected, abs=1e-5)
 
 
-def test_progress_replay_protects_positive_progress_and_returns_is_weights():
-    config = _config(
-        replay_capacity=8,
-        replay_batch_fragments=4,
-        replay_event_fraction=0.75,
-        replay_high_progress_fraction=0.0,
-    )
-    learner = GamepadVTraceLearner(config)
-    zero = _collect_fragment(learner, 1)
-    positive = _collect_fragment(learner, 1)
-    _add_one_food(positive)
-    replay = ProgressFragmentReplay(config)
-    replay.append(zero)
-    replay.append(positive)
-
-    sampled, weights, metrics = replay.sample()
-
-    assert len(sampled) == 4
-    assert weights.shape == (4,)
-    assert np.all(np.isfinite(weights))
-    assert replay.event_size == 1
-    assert metrics["replay_stratum_sizes"]["0"] == 1
-    assert metrics["replay_stratum_sizes"]["1-4"] == 1
-
-
-def test_replay_does_not_treat_prior_score_as_a_food_event():
-    config = _config(
-        replay_capacity=16,
-        replay_batch_fragments=8,
-        replay_event_fraction=1.0,
-        replay_high_progress_fraction=0.0,
-    )
-    learner = GamepadVTraceLearner(config)
-    continued = _collect_fragment(learner, 1)
-    continued["score_start"] = 1
-    continued["score_end"] = 1
-    continued["scores"][:] = 1
-    event = _collect_fragment(learner, 1)
-    _add_one_food(event)
-    replay = ProgressFragmentReplay(config)
-    replay.append(continued)
-    replay.append(event)
-
-    sampled, _, metrics = replay.sample()
-
-    assert replay.stratum_sizes["1-4"] == 2
-    assert replay.event_size == 1
-    assert metrics["replay_event_size"] == 1
-    assert {item["fragment_id"] for item in sampled} == {event["fragment_id"]}
-
-
-def test_fresh_is_transition_weighted_but_replay_is_item_weighted():
-    mask = torch.tensor([[True, True], [False, True]])
-    lengths = torch.tensor([1, 2])
-
-    fresh = _sequence_loss_weights(mask, lengths, None)
-    replay = _sequence_loss_weights(mask, lengths, np.ones(2, np.float32))
-
-    torch.testing.assert_close(fresh.sum(0), torch.tensor([1.0, 2.0]))
-    torch.testing.assert_close(replay.sum(0), torch.tensor([1.0, 1.0]))
-    assert replay[0, 0] == pytest.approx(1.0)
-    assert replay[:, 1].tolist() == pytest.approx([0.5, 0.5])
-
-
 def test_importance_ess_is_stable_for_extreme_log_ratios():
-    concentrated = _importance_effective_sample_size(
+    concentrated = importance_effective_sample_size(
         torch.tensor([1_000.0, 100.0], dtype=torch.float32)
     )
-    equal = _importance_effective_sample_size(
+    equal = importance_effective_sample_size(
         torch.tensor([1_000.0, 1_000.0], dtype=torch.float32)
     )
 
     assert torch.isfinite(concentrated)
     assert concentrated == pytest.approx(1.0)
     assert equal == pytest.approx(2.0)
-
-
-def test_replay_rejects_a_mixed_behavior_version_fragment():
-    config = _config()
-    learner = GamepadVTraceLearner(config)
-    fragment = _collect_fragment(learner, 2)
-    fragment["policy_versions"] = np.array([1, 2])
-    replay = ProgressFragmentReplay(config)
-
-    with pytest.raises(ValueError, match="one behavior policy version"):
-        replay.append(fragment)
 
 
 @pytest.mark.parametrize(
@@ -1341,70 +1164,6 @@ def test_future_behavior_version_is_rejected_before_optimizer_mutation():
     assert learner.update_count == 0
     for key, value in learner.model.state_dict().items():
         torch.testing.assert_close(value, before[key])
-
-
-def test_fragment_replay_checkpoint_preserves_payloads_and_sampling_rng():
-    config = _config(
-        replay_batch_fragments=4,
-        replay_event_fraction=0.5,
-        replay_high_progress_fraction=0.0,
-    )
-    learner = GamepadVTraceLearner(config)
-    zero = _collect_fragment(learner, 1)
-    positive = _collect_fragment(learner, 1)
-    _add_one_food(positive)
-    original = ProgressFragmentReplay(config)
-    original.append(zero)
-    original.append(positive)
-    restored = ProgressFragmentReplay(config)
-
-    restored.load_state_dict(original.state_dict())
-
-    assert restored.stratum_sizes == original.stratum_sizes
-    assert restored.payload_bytes == original.payload_bytes
-    assert restored.event_size == original.event_size
-    assert restored.index.event_seen_counts == original.index.event_seen_counts
-    assert restored.index.non_event_seen_counts == original.index.non_event_seen_counts
-    left, left_weights, _ = original.sample()
-    right, right_weights, _ = restored.sample()
-    assert [item["fragment_id"] for item in left] == [
-        item["fragment_id"] for item in right
-    ]
-    np.testing.assert_allclose(left_weights, right_weights)
-
-
-def test_fragment_replay_checkpoint_rejects_old_event_ambiguous_format():
-    config = _config()
-    replay = ProgressFragmentReplay(config)
-    state = replay.state_dict()
-    state["format"] = "gamepad-vtrace-progress-fragments-v1"
-
-    with pytest.raises(ValueError, match="format mismatch"):
-        ProgressFragmentReplay(config).load_state_dict(state)
-
-
-def test_fragment_replay_checkpoint_rejects_swapped_index_payloads():
-    config = _config()
-    learner = GamepadVTraceLearner(config)
-    zero = _collect_fragment(learner, 1)
-    positive = _collect_fragment(learner, 1)
-    _add_one_food(positive)
-    original = ProgressFragmentReplay(config)
-    original.append(zero)
-    original.append(positive)
-    state = copy.deepcopy(original.state_dict())
-    left, right = sorted(state["payloads"])
-    state["payloads"][left], state["payloads"][right] = (
-        state["payloads"][right],
-        state["payloads"][left],
-    )
-    state["payload_nbytes"] = {
-        item_id: ProgressFragmentReplay._fragment_nbytes(fragment)
-        for item_id, fragment in state["payloads"].items()
-    }
-
-    with pytest.raises(ValueError, match="payload/index metadata"):
-        ProgressFragmentReplay(config).load_state_dict(state)
 
 
 def test_shared_parameter_publication_is_coherent_and_versioned():

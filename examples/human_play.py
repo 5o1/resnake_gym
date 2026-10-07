@@ -8,6 +8,7 @@ import gymnasium as gym
 import numpy as np
 
 import resnake_gym  # noqa: F401 - importing the package registers the environment
+from resnake_gym import gamepad
 
 try:
     import pygame
@@ -17,7 +18,7 @@ except ImportError as exc:  # pragma: no cover - depends on the optional extra
     ) from exc
 
 
-KEY_TO_ACTION = {
+KEY_TO_DIRECTION = {
     pygame.K_UP: 0,
     pygame.K_w: 0,
     pygame.K_RIGHT: 1,
@@ -26,6 +27,13 @@ KEY_TO_ACTION = {
     pygame.K_s: 2,
     pygame.K_LEFT: 3,
     pygame.K_a: 3,
+}
+
+DPAD_INDEX_BY_DIRECTION = {
+    0: 0,  # up
+    1: 3,  # right
+    2: 1,  # down
+    3: 2,  # left
 }
 
 
@@ -45,20 +53,27 @@ def facing_direction(observation: np.ndarray) -> int:
     return int(np.argmax(direction_channels.max(axis=1)))
 
 
+def dpad_report(direction: int) -> np.ndarray:
+    """Encode an absolute direction as a normalized gamepad report."""
+
+    report = gamepad.neutral()
+    report[DPAD_INDEX_BY_DIRECTION[direction]] = 1.0
+    return report
+
+
 def main() -> None:
     args = parse_args()
     env = gym.make(
-        "resnake_gym/ReSnake-v0",
+        resnake_gym.ENV_ID,
         width=args.width,
         height=args.height,
-        action_mode="absolute",
         logic_fps=args.logic_fps,
         frame_skip=1,
         render_mode="human",
     )
 
     observation, _ = env.reset(seed=args.seed)
-    action = facing_direction(observation)
+    action = dpad_report(facing_direction(observation))
     game_over = False
     running = True
 
@@ -75,15 +90,15 @@ def main() -> None:
                         running = False
                     elif event.key == pygame.K_r:
                         restart = True
-                    elif event.key in KEY_TO_ACTION:
-                        action = KEY_TO_ACTION[event.key]
+                    elif event.key in KEY_TO_DIRECTION:
+                        action = dpad_report(KEY_TO_DIRECTION[event.key])
 
             if not running:
                 break
 
             if restart:
                 observation, _ = env.reset(seed=args.seed)
-                action = facing_direction(observation)
+                action = dpad_report(facing_direction(observation))
                 game_over = False
                 continue
 

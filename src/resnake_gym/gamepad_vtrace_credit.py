@@ -766,10 +766,7 @@ class _FreshCollection:
     received_action_audit: ActionExecutionAudit = field(init=False)
 
     def __post_init__(self) -> None:
-        self.received_action_audit = ActionExecutionAudit(
-            self.config.action_head,
-            self.config.chunk_length,
-        )
+        self.received_action_audit = ActionExecutionAudit(self.config.chunk_length)
 
     def needs_more(self) -> bool:
         return self.transitions < self.config.batch_min_transitions or (

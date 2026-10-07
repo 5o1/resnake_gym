@@ -12,7 +12,6 @@ from torch import Tensor
 from resnake_gym.gamepad_runtime import build_model, stack_observations
 from resnake_gym.gamepad_vtrace_contract import (
     VTraceConfig,
-    _action_variable_count,
     checkpoint_metadata,
     validate_checkpoint,
 )
@@ -25,7 +24,6 @@ from resnake_gym.models import (
 from resnake_gym.training.vtrace_learner_audit import (
     action_audit_metrics,
     credit_trace_metrics,
-    importance_effective_sample_size,
 )
 from resnake_gym.vtrace import VTraceReturns, vtrace_from_log_probs
 
@@ -152,37 +150,6 @@ def _padded_trace_array(
     return result
 
 
-def _sequence_loss_weights(
-    mask: Tensor,
-    lengths: Tensor,
-    sequence_weights: Tensor | np.ndarray | None,
-) -> Tensor:
-    """Return transition weights for fresh data or item-sampled replay.
-
-    Fresh FIFO learning estimates a transition-average objective, so every
-    valid row has unit mass.  Progress replay samples *fragments* and its
-    importance ratio is defined over that item support; each sampled fragment
-    must therefore receive its item weight once, divided equally over its
-    valid rows.  Otherwise a length-128 item would silently have 128 times the
-    target mass of a length-1 terminal item.
-    """
-    if sequence_weights is None:
-        return mask.to(torch.float32)
-    weights = torch.as_tensor(sequence_weights, device=mask.device, dtype=torch.float32)
-    batch_size = mask.shape[1]
-    if weights.shape != (batch_size,):
-        raise ValueError("sequence weights must have shape [B]")
-    if not torch.isfinite(weights).all() or torch.any(weights <= 0):
-        raise ValueError("sequence weights must be finite and positive")
-    weights = weights / weights.mean()
-    return mask.to(torch.float32) * (weights / lengths.to(torch.float32))[None]
-
-
-def _importance_effective_sample_size(log_weights: Tensor) -> Tensor:
-    """Compatibility wrapper for the pre-modularization helper."""
-    return importance_effective_sample_size(log_weights)
-
-
 class GamepadVTraceLearner:
     """One GPU learner with event-scale targets and bounded recurrent BPTT."""
 
@@ -295,12 +262,10 @@ class GamepadVTraceLearner:
                     )
                 )
                 distribution_slot_logits = distribution.logits
-                if c.action_head == "held_dpad5":
-                    distribution_slot_logits = distribution_slot_logits.unsqueeze(1)
                 target_slot_log_probs.append(
                     torch.zeros(
                         len(traces),
-                        _action_variable_count(c),
+                        c.chunk_length,
                         5,
                         device=self.device,
                     ).index_copy(0, active_indices, distribution_slot_logits)
@@ -330,12 +295,7 @@ class GamepadVTraceLearner:
     def _validate_update_request(
         self,
         traces: list[dict[str, Any]],
-        *,
-        sequence_weights: Tensor | np.ndarray | None,
-        source: str,
     ) -> _UpdateRequest:
-        if source != "fresh" or sequence_weights is not None:
-            raise ValueError("event-trace learner currently accepts fresh data only")
         if not traces:
             raise ValueError("V-trace learner requires at least one credit trace")
         for trace in traces:
@@ -351,11 +311,7 @@ class GamepadVTraceLearner:
             versions=versions,
         )
 
-    def _prepare_vtrace_batch(
-        self,
-        traces: list[dict[str, Any]],
-        sequence_weights: Tensor | np.ndarray | None,
-    ) -> _VTraceBatch:
+    def _prepare_vtrace_batch(self, traces: list[dict[str, Any]]) -> _VTraceBatch:
         c = self.config
         (
             target_log_probs,
@@ -422,7 +378,7 @@ class GamepadVTraceLearner:
             c_bar=c.c_bar,
             pg_rho_bar=c.pg_rho_bar,
         )
-        loss_weights = _sequence_loss_weights(mask, lengths, sequence_weights)
+        loss_weights = mask.to(torch.float32)
         return _VTraceBatch(
             target_log_probs=target_log_probs,
             target_slot_log_probs=target_slot_log_probs,
@@ -534,7 +490,7 @@ class GamepadVTraceLearner:
         policy_loss = policy_numerator / batch.denominator
         value_loss = value_numerator / batch.denominator
         latent_entropy = entropy_numerator / batch.denominator
-        action_variable_count = _action_variable_count(c)
+        action_variable_count = c.chunk_length
         entropy_per_action_variable = latent_entropy / action_variable_count
         entropy_normalized = entropy_per_action_variable / float(np.log(5.0))
         entropy_beta_h = c.entropy_coefficient * latent_entropy
@@ -565,13 +521,12 @@ class GamepadVTraceLearner:
     def _loss_metrics(
         self, optimization: _OptimizationResult
     ) -> dict[str, float | int]:
-        action_variable_count = _action_variable_count(self.config)
+        action_variable_count = self.config.chunk_length
         return {
             "loss": float(optimization.loss.detach()),
             "policy_loss": float(optimization.policy_loss.detach()),
             "value_loss": float(optimization.value_loss.detach()),
             "latent_entropy": float(optimization.latent_entropy.detach()),
-            # These aliases make H1 and J8 comparable without consulting config.
             "entropy_joint_nats": float(optimization.latent_entropy.detach()),
             "entropy_action_variables_per_decision": action_variable_count,
             "entropy_per_action_variable_nats": float(
@@ -587,26 +542,20 @@ class GamepadVTraceLearner:
     def update(
         self,
         traces: list[dict[str, Any]],
-        *,
-        sequence_weights: Tensor | np.ndarray | None = None,
-        source: str = "fresh",
     ) -> dict[str, Any]:
         """Apply exactly one optimizer step to complete event-scale traces."""
-        request = self._validate_update_request(
-            traces, sequence_weights=sequence_weights, source=source
-        )
+        request = self._validate_update_request(traces)
         self.model.train()
-        batch = self._prepare_vtrace_batch(traces, sequence_weights)
+        batch = self._prepare_vtrace_batch(traces)
         optimization = self._optimize_batch(traces, batch)
         valid_count = int(batch.mask.sum())
         logic_ticks = sum(
             int(_trace_array(trace, "ticks_advanced").sum()) for trace in traces
         )
-        if source == "fresh":
-            self.logic_ticks += logic_ticks
-            self.transitions += valid_count
+        self.logic_ticks += logic_ticks
+        self.transitions += valid_count
         return {
-            "learner_source": source,
+            "learner_source": "fresh",
             "learner_update": self.update_count,
             "target_policy_version": request.target_policy_version,
             "learner_transitions": valid_count,

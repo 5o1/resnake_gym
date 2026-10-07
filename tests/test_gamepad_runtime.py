@@ -1,32 +1,19 @@
-"""Architecture-level compatibility tests for shared gamepad runtime code."""
+"""Tests for shared gamepad runtime code."""
 
 import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from resnake_gym import gamepad_ppo  # noqa: E402
-from resnake_gym.gamepad_ppo_contract import (  # noqa: E402
-    PPOConfig,
-    validate_policy_checkpoint,
-)
 from resnake_gym.gamepad_runtime import (  # noqa: E402
     build_model,
-    make_env,
     stack_observations,
 )
+from resnake_gym.gamepad_vtrace_contract import VTraceConfig  # noqa: E402
 
 
-def test_legacy_ppo_exports_are_thin_compatibility_aliases():
-    assert gamepad_ppo.PPOConfig is PPOConfig
-    assert gamepad_ppo.validate_policy_checkpoint is validate_policy_checkpoint
-    assert gamepad_ppo.build_model is build_model
-    assert gamepad_ppo.make_env is make_env
-    assert gamepad_ppo.stack_observations is stack_observations
-
-
-def test_runtime_supports_the_serialized_ppo_configuration():
-    config = PPOConfig(dim=16, chunk_length=3)
+def test_runtime_builds_the_vtrace_policy_configuration():
+    config = VTraceConfig(dim=16, chunk_length=3)
     model = build_model(config)
     assert model.chunk_length == 3
 

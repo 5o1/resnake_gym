@@ -16,11 +16,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logic-fps", type=float, default=10.0)
     parser.add_argument("--frame-skip", type=int, default=1)
     parser.add_argument(
-        "--action-mode",
-        choices=("absolute", "relative"),
-        default="absolute",
-    )
-    parser.add_argument(
         "--ansi",
         action="store_true",
         help="print every board state (considerably slower than headless sampling)",
@@ -32,8 +27,7 @@ def main() -> None:
     args = parse_args()
     render_mode = "ansi" if args.ansi else None
     env = gym.make(
-        "resnake_gym/ReSnake-v0",
-        action_mode=args.action_mode,
+        resnake_gym.ENV_ID,
         logic_fps=args.logic_fps,
         frame_skip=args.frame_skip,
         render_mode=render_mode,

@@ -43,14 +43,12 @@ def _options(tmp_path: Path, **overrides):
 def test_cli_config_mapping_is_explicit_and_preserves_spatial_pool_inversion():
     arguments = _config_arguments(
         width=17,
-        action_head="held_dpad5",
         no_spatial_pool=True,
     )
 
     config = vtrace_run.build_vtrace_config(arguments)
 
     assert config.width == 17
-    assert config.action_head == "held_dpad5"
     assert config.spatial_pool is False
     assert {
         name: getattr(config, name) for name in vtrace_run.VTRACE_CONFIG_ARGUMENT_FIELDS
@@ -175,8 +173,7 @@ class IterationLearner:
     logic_ticks = 0
     transitions = 0
 
-    def update(self, traces, *, source):
-        assert source == "fresh"
+    def update(self, traces):
         assert traces == [{"score_end": 2, "trace_marker": "best"}]
         self.update_count = 1
         self.logic_ticks = 3

@@ -10,10 +10,9 @@ from torch import Tensor
 
 import resnake_gym.gamepad as gamepad
 from resnake_gym.gamepad_vtrace_contract import (
+    ACTION_ENCODING,
     FRAGMENT_FORMAT,
     VTraceConfig,
-    _action_variable_count,
-    action_semantics,
 )
 
 _DPAD5_REPORTS = gamepad.dpad5_reports()
@@ -41,7 +40,6 @@ def _new_buffer(
     episode_id: int,
     initial_hidden: Tensor,
     score: int,
-    action_head: str = "dpad5",
     burn_context=(),
     run_generation: int = 0,
     fragment_sequence: int = 0,
@@ -53,7 +51,6 @@ def _new_buffer(
         if burn_context
         else initial_hidden.detach().cpu().numpy().astype(np.float32)
     )
-    semantics = action_semantics(action_head)
     return {
         "actor_id": actor_id,
         "env_id": env_id,
@@ -62,8 +59,7 @@ def _new_buffer(
         "fragment_sequence": fragment_sequence,
         "decision_start": decision_start,
         "score_start": int(score),
-        "action_head": action_head,
-        "action_encoding": semantics["action_encoding"],
+        "action_encoding": ACTION_ENCODING,
         "initial_hidden": initial_hidden.detach().cpu().numpy().astype(np.float32),
         "burn_h0": burn_h0,
         "burn_observations": [
@@ -118,12 +114,9 @@ def _finish_fragment(
         "fragment_sequence": buffer["fragment_sequence"],
         "decision_start": buffer["decision_start"],
         "decision_end": buffer["decision_start"] + length,
-        "action_head": buffer["action_head"],
         "action_encoding": buffer["action_encoding"],
-        "action_variables_per_decision": (
-            1
-            if buffer["action_head"] == "held_dpad5"
-            else int(np.asarray(buffer["policy_actions"][0]).size)
+        "action_variables_per_decision": int(
+            np.asarray(buffer["policy_actions"][0]).size
         ),
         "score_start": buffer["score_start"],
         "score_end": int(buffer["scores"][-1]),
@@ -203,8 +196,6 @@ def _append_transition(
     buffer["requested_reports"].append(np.asarray(requested_report).copy())
     buffer["behavior_log_probs"].append(float(behavior_log_prob))
     behavior_slot_log_probs = np.asarray(behavior_slot_log_probs, dtype=np.float32)
-    if buffer["action_head"] == "held_dpad5" and behavior_slot_log_probs.shape == (5,):
-        behavior_slot_log_probs = behavior_slot_log_probs[None]
     buffer["behavior_slot_log_probs"].append(behavior_slot_log_probs.copy())
     buffer["rewards"].append(float(reward))
     buffer["discounts"].append(0.0 if terminated else float(info["bootstrap_discount"]))
@@ -349,11 +340,8 @@ def _validate_fragment_schema(
         raise ValueError("fragment decision range does not match its length")
     if fragment.get("timebase") != "simulation_tick":
         raise ValueError("fragment timebase is invalid")
-    action_variables = _action_variable_count(config)
-    semantics = action_semantics(config.action_head)
-    if fragment.get("action_head") != config.action_head:
-        raise ValueError("fragment action head mismatch")
-    if fragment.get("action_encoding") != semantics["action_encoding"]:
+    action_variables = config.chunk_length
+    if fragment.get("action_encoding") != ACTION_ENCODING:
         raise ValueError("fragment action encoding mismatch")
     if fragment.get("action_variables_per_decision") != action_variables:
         raise ValueError("fragment action variable count mismatch")
@@ -368,11 +356,7 @@ def _validate_fragment_shapes(
     action_variables: int,
 ) -> None:
     """Validate tensor, recurrent-state, burn-in, and audit row shapes."""
-    policy_action_shape = (
-        (length,)
-        if config.action_head == "held_dpad5"
-        else (length, config.chunk_length)
-    )
+    policy_action_shape = (length, config.chunk_length)
     if fragment["policy_actions"].shape != policy_action_shape:
         raise ValueError("fragment policy action shape mismatch")
     if fragment["requested_reports"].shape != (
@@ -441,12 +425,9 @@ def _validate_fragment_behavior(fragment: dict[str, Any], config: VTraceConfig) 
     behavior_probabilities = np.exp(fragment["behavior_slot_log_probs"])
     if not np.allclose(behavior_probabilities.sum(-1), 1.0, rtol=1e-5, atol=1e-6):
         raise ValueError("fragment behavior log probabilities are not normalized")
-    action_indices = fragment["policy_actions"]
-    if config.action_head == "held_dpad5":
-        action_indices = action_indices[:, None]
     selected_slot_log_probs = np.take_along_axis(
         fragment["behavior_slot_log_probs"],
-        action_indices[..., None],
+        fragment["policy_actions"][..., None],
         axis=-1,
     )[..., 0].sum(-1)
     if not np.allclose(
@@ -567,8 +548,6 @@ def _validate_fragment_action_semantics(
         raise ValueError("fragment discount does not equal gamma ** ticks")
     expected_reports = np.zeros_like(fragment["requested_reports"])
     report_actions = fragment["policy_actions"]
-    if config.action_head == "held_dpad5":
-        report_actions = np.repeat(report_actions[:, None], config.chunk_length, axis=1)
     for category, button in ((1, 0), (2, 1), (3, 2), (4, 3)):
         expected_reports[..., button] = report_actions == category
     if not np.array_equal(fragment["requested_reports"], expected_reports):

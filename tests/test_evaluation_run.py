@@ -12,7 +12,7 @@ from resnake_gym.evaluation_run import (
     atomic_json,
     build_evaluation_result,
 )
-from resnake_gym.gamepad_ppo_contract import PPOConfig
+from resnake_gym.gamepad_vtrace_contract import VTraceConfig
 
 
 def test_result_records_source_and_complete_environment_protocol(tmp_path):
@@ -25,7 +25,7 @@ def test_result_records_source_and_complete_environment_protocol(tmp_path):
         device="cpu",
         stochastic=False,
     )
-    config = PPOConfig(width=12, height=8, initial_length=5, action_head="dpad5")
+    config = VTraceConfig(width=12, height=8, initial_length=5)
     result = build_evaluation_result(
         {"logic_ticks": 11, "transitions": 3, "policy_version": 2},
         config,
@@ -53,9 +53,9 @@ def test_atomic_json_refuses_to_replace_an_existing_result(tmp_path):
         atomic_json(path, {"complete": False})
 
 
-def test_script_retains_evaluation_helper_compatibility_names():
+def test_vtrace_evaluation_script_exposes_the_atomic_writer():
     namespace = runpy.run_path(
-        Path(__file__).parents[1] / "scripts" / "evaluate_gamepad_ppo.py"
+        Path(__file__).parents[1] / "scripts" / "evaluate_gamepad_vtrace.py"
     )
 
     assert namespace["_atomic_json"] is atomic_json

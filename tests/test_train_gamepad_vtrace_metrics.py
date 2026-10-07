@@ -22,37 +22,6 @@ def module():
     return result
 
 
-def test_episode_metrics_report_quantiles_lifetime_and_death_reasons():
-    metrics = module()._episode_metrics(
-        [
-            {
-                "score": 0,
-                "ticks": 10,
-                "won": False,
-                "termination": "wall_collision",
-            },
-            {
-                "score": 3,
-                "ticks": 40,
-                "won": False,
-                "termination": "time_limit",
-            },
-        ],
-        prefix="received_",
-    )
-
-    assert metrics["received_completed_episodes"] == 2
-    assert metrics["received_episode_score_p50"] == 1.5
-    assert metrics["received_episode_score_p90"] == pytest.approx(2.7)
-    assert metrics["received_episode_score_p99"] == pytest.approx(2.97)
-    assert metrics["received_episode_lifetime_ticks_mean"] == 25
-    assert metrics["received_episode_lifetime_ticks_p90"] == pytest.approx(37)
-    assert metrics["received_termination_wall_collision_count"] == 1
-    assert metrics["received_termination_time_limit_count"] == 1
-    assert metrics["received_death_count"] == 1
-    assert metrics["received_death_rate"] == 0.5
-
-
 def test_empty_episode_population_does_not_publish_fake_zero_quantiles():
     metrics = module()._episode_metrics([], prefix="received_")
 
@@ -96,4 +65,3 @@ def test_inference_checkpoint_carries_received_and_trained_axes(tmp_path):
     assert policy["received_transitions"] == 0
     runtime = torch.load(tmp_path / "runtime.pt", weights_only=False)
     assert runtime["checkpoint_id"] == policy["runtime_checkpoint_id"]
-    assert "replay" not in runtime

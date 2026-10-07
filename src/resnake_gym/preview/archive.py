@@ -495,7 +495,6 @@ def publish_episode(site, episode, writer, retention, max_storage_bytes):
             url=filename,
             assets=assets,
             bytes=archive_bytes,
-            action_head=episode.get("action_head"),
             action_encoding=episode.get("action_encoding"),
             training_objective=episode.get("training_objective"),
             checkpoint_format=episode.get("checkpoint_format"),

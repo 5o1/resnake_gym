@@ -87,15 +87,7 @@ def _rollout_episode(env, model, config, options, episode: int):
             hidden,
         )
         action = sample_policy_action(distribution, stochastic=options.stochastic)
-        report = (
-            reports_from_policy_action(
-                distribution,
-                action,
-                continuous_buttons=config.chunk_rho is not None,
-            )[0]
-            .cpu()
-            .numpy()
-        )
+        report = reports_from_policy_action(distribution, action)[0].cpu().numpy()
         timings.append(time.perf_counter() - started)
         observed_ages.append(float(observation["timing"][0]))
         observation, _, terminated, truncated, info = env.step(report)
@@ -171,7 +163,6 @@ def _source_fields(checkpoint: dict[str, Any], config, path: Path) -> dict[str, 
             if "received_transitions" in checkpoint
             else None
         ),
-        "source_action_head": config.action_head,
         "source_action_encoding": checkpoint.get("action_encoding"),
         "source_training_objective": checkpoint.get("training_objective"),
         "source_checkpoint_format": checkpoint.get("format"),
@@ -183,13 +174,7 @@ def _source_fields(checkpoint: dict[str, Any], config, path: Path) -> dict[str, 
             None,
         ),
         "source_bptt_window": getattr(config, "bptt_window", None),
-        "source_action_variables_per_decision": (
-            1
-            if config.action_head == "held_dpad5"
-            else config.chunk_length
-            if config.action_head == "dpad5"
-            else None
-        ),
+        "source_action_variables_per_decision": config.chunk_length,
     }
 
 

@@ -34,7 +34,6 @@ _SEMANTIC_KEYS = (
     "collection_semantics",
     "recurrent_state",
     "recurrent_update",
-    "replay_objective",
     "action_encoding",
     "reward_version",
     "scene_encoding",
@@ -60,7 +59,6 @@ class WandbSyncOptions:
     entity: str
     project: str
     training_pid: int | None = None
-    evaluation_pid: int | None = None
     proxy: str = "http://127.0.0.1:17891"
 
 
@@ -69,15 +67,9 @@ def alive(pid: int | None, directory: Path) -> bool:
 
     return process_command_matches(
         pid,
-        (b"train_gamepad_ppo.py", b"train_gamepad_vtrace.py"),
+        (b"train_gamepad_vtrace.py",),
         directory,
     )
-
-
-def evaluation_alive(pid: int | None, directory: Path) -> bool:
-    """Return whether ``pid`` is the evaluation watcher for this run."""
-
-    return process_command_matches(pid, (b"watch_learning.py",), directory)
 
 
 def wait_for_metadata(
@@ -204,21 +196,14 @@ def _should_stop(
     options: WandbSyncOptions,
     *,
     trainer_running: bool,
-    evaluator_running: bool,
     uploaded: int,
     ended_polls: int,
 ) -> tuple[bool, int]:
-    if not options.training_pid and not options.evaluation_pid:
+    if not options.training_pid:
         return True, ended_polls
-    all_finished = not trainer_running and (
-        not options.evaluation_pid or not evaluator_running
-    )
+    all_finished = not trainer_running
     ended_polls = ended_polls + 1 if all_finished and uploaded == 0 else 0
-    # With an explicit evaluation PID, its exit proves that final validation
-    # files have been closed. Two quiet scans cover file visibility and upload;
-    # the legacy trainer-only mode retains its longer grace period.
-    quiet_limit = 2 if options.evaluation_pid else 6
-    return ended_polls >= quiet_limit, ended_polls
+    return ended_polls >= 6, ended_polls
 
 
 def sync_wandb(
@@ -232,7 +217,6 @@ def sync_wandb(
         entity=options.entity,
         project=options.project,
         training_pid=options.training_pid,
-        evaluation_pid=options.evaluation_pid,
         proxy=options.proxy,
     )
     _configure_proxy(options.proxy)
@@ -248,9 +232,7 @@ def sync_wandb(
             uploaded = _upload_new_events(directory, run, seen, defined)
             run.summary["synced_source_events"] = len(seen)
             trainer_running = alive(options.training_pid, directory)
-            evaluator_running = evaluation_alive(options.evaluation_pid, directory)
             run.summary["training_process_alive"] = trainer_running
-            run.summary["evaluation_process_alive"] = evaluator_running
             print(
                 json.dumps({"new_events": uploaded, "total_events": len(seen)}),
                 flush=True,
@@ -258,7 +240,6 @@ def sync_wandb(
             stop, ended_polls = _should_stop(
                 options,
                 trainer_running=trainer_running,
-                evaluator_running=evaluator_running,
                 uploaded=uploaded,
                 ended_polls=ended_polls,
             )

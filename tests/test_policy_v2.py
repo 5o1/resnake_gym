@@ -74,25 +74,23 @@ def test_realtime_time_fields_use_nanoseconds_not_tick_age():
 
 
 @pytest.mark.parametrize("decoder", ["parallel", "gru"])
-def test_timing_conditioned_policy_and_ppo(decoder):
+def test_timing_conditioned_vtrace_policy(decoder):
     torch = pytest.importorskip("torch")
-    from resnake_gym.gamepad_ppo import GamepadPPO, PPOConfig, stack_observations
+    from resnake_gym.gamepad_runtime import build_model, make_env, stack_observations
+    from resnake_gym.gamepad_vtrace_contract import VTraceConfig
     from resnake_gym.models import distribution_from_observation
 
     torch.set_num_threads(1)
-    trainer = GamepadPPO(
-        PPOConfig(dim=16, num_envs=1, rollout_steps=3, epochs=1, decoder=decoder)
-    )
+    config = VTraceConfig(dim=16, decoder=decoder)
+    model = build_model(config)
+    env = make_env(config)
     try:
-        obs = stack_observations(trainer.observations, "cpu")
-        first, _, _ = distribution_from_observation(trainer.model, obs)
+        observation, _ = env.reset(seed=7)
+        obs = stack_observations([observation], "cpu")
+        first, _, _ = distribution_from_observation(model, obs)
         obs["time_context"][:, 0] += 0.2
-        second, _, _ = distribution_from_observation(trainer.model, obs)
-        assert not torch.equal(first[0].logits, second[0].logits)
-        assert second[0].logits.shape == (1, 8, 14)
-        assert second[1].loc.shape == (1, 8, 6)
-        metrics = trainer.update()
-        assert np.isfinite(metrics["loss"])
-        assert trainer.checkpoint()["time_encoding"] == "policy-time-v2"
+        second, _, _ = distribution_from_observation(model, obs)
+        assert not torch.equal(first.logits, second.logits)
+        assert second.logits.shape == (1, 8, 5)
     finally:
-        trainer.close()
+        env.close()
