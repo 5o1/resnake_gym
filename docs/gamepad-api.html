@@ -1,0 +1,90 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<title>虚拟手柄 API — 两线程协作契约</title>
+<style>body{max-width:980px;margin:40px auto;padding:0 24px;font:16px/1.8 system-ui;color:#222}table{border-collapse:collapse;width:100%}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}code,pre{background:#f3f4f6}pre{padding:16px;overflow:auto}h2{margin-top:2em}</style>
+<h1>虚拟手柄 API</h1><p>维护范围：本线程负责输入／输出契约、扰动环境、时间调度和验收工具。另一线程负责训练、VLA及机械平台。双方不要改变下述字段顺序或把游戏转向作为手柄动作。</p>
+<p>控件版本：<code>xinput-normalized-v1</code>；带时间动作包版本：<code>gamepad-timed-v1</code>。权威布局在<code>src/resnake_gym/gamepad.py</code>；可执行校验在<code>src/resnake_gym/protocol.py</code>。现有20维布局不变。今后不兼容修改必须提升版本。</p>
+<h2>1. 可微模型边界</h2>
+<p>游戏策略交给VLA的张量为<code>torch.Tensor[B,L,20]</code>，推荐float32、与接收模型同设备。B为batch，L为预测逻辑帧数。张量必须保留计算图，不能在两模型之间转NumPy、整数、列表或detach。按钮可用硬前向／软反向的代理梯度；代理梯度有偏，不等于真实开关、接触或游戏奖励可微。具体联合目标由训练线程维护。</p>
+<p>只有执行边界把一个batch元素转为<code>numpy.float32[L,20]</code>或wire列表，构造GamepadCommand；这一边界不承诺梯度。原始可微张量需由训练代码保留。以下20维排列是对XInput控件的项目编码，不声称是官方深度学习标准。</p>
+<table><tr><th>索引</th><th>字段（严格顺序）</th><th>范围／方向</th></tr>
+<tr><td>0—3</td><td>dpad_up, dpad_down, dpad_left, dpad_right</td><td>0释放，1按住</td></tr>
+<tr><td>4—9</td><td>start, back, left_thumb, right_thumb, lb, rb</td><td>0释放，1按住</td></tr>
+<tr><td>10—13</td><td>a, b, x, y</td><td>0释放，1按住</td></tr>
+<tr><td>14—17</td><td>lx, ly, rx, ry</td><td>[-1,1]；X正向右，Y正向上；0回中</td></tr>
+<tr><td>18—19</td><td>lt, rt</td><td>[0,1]；0释放</td></tr></table>
+<p>实际执行报告的按钮以≥0.5判为按住；软值不是力度。全部0为中立，不是让蛇停止。保持相同报告表示持续按住，不是重复点击。禁止NaN、Inf、越界、缺字段；不静默裁剪。SDL的Y轴需转换，不能直接复制其轴符号。</p>
+<p><strong>Snake训练目标不缩窄这份API。</strong>raw-v3只对十字键0—3及左摇杆14—15这六个因子的边缘概率求分数，并在策略内部遮蔽其余控件的report、history和previous_chunk反馈。dpad5-v4在策略内部保存neutral/up/down/left/right整数类别，执行前才用固定模板展开成完整20维报告；模板不读取棋盘，也不替策略纠错。H1保持动作头只采样一个这样的类别，再沿L个槽复制；它的可微路径只做一次softmax ST，再复制完整报告。三种模型都向下游交付<code>[B,L,20]</code>张量，环境也始终只接收这份完整报告。不得把六维因果子集或五分类latent当成新的环境动作格式。以后游戏绑定、跨控件分布或反馈路径变化时，训练目标需重新审计，外部字段顺序仍按版本规则处理。内部动作头的精确定义见<a href="structured-gamepad-action.md">结构化手柄动作设计</a>和<a href="held-dpad5-diagnostic.md">H1动作头说明</a>。</p>
+<h2>2. 时间契约</h2>
+<p>逻辑状态t是完成t次移动后的状态。报告目标tick=t控制转移t→t+1。第j个报告的目标是<code>origin_tick+j</code>，不是收到动作包的时刻+j，也不是旧画面的capture_tick+j。晚到前缀丢弃；没有可执行报告时发送中立；不根据蛇的位置纠错。</p>
+<table><tr><th>必填字段</th><th>含义</th></tr>
+<tr><td>sequence</td><td>单次运行内严格递增的非负整数。旧序号不覆盖新计划；运行重置后重新开始。</td></tr>
+<tr><td>origin_tick</td><td>开始本次决策所用的控制器快照帧号；可以比实际执行时刻旧。</td></tr>
+<tr><td>observation_tick</td><td>该快照携带画面的采集帧号，必须≤origin_tick。</td></tr>
+<tr><td>clock_id</td><td>时钟域标识。不同设备的单调时钟不可直接相减。</td></tr>
+<tr><td>observation_captured_ns</td><td>画面采集完成时刻。</td></tr>
+<tr><td>observation_received_ns</td><td>画面送达控制端的时刻，不是模型开始读取时刻。</td></tr>
+<tr><td>inference_started_ns / inference_completed_ns</td><td>该动作块推理开始／结束时刻。</td></tr>
+<tr><td>submitted_ns</td><td>动作包交给执行传输层的时刻。</td></tr>
+<tr><td>reports</td><td>[L,20]，完整状态序列；没有省略值继承的语义。</td></tr></table>
+<p>所有ns字段为同一clock_id下有序、非负的整数纳秒。墙钟UTC仅用于日志人类对照，不参与延迟计算。跨机器接入需保留各端原始时间、校准映射和不确定度；当前执行器拒绝未经校准的不同clock_id。不得把网络往返时间的一半冒充精确单程延迟。</p>
+<p>执行日志额外保存<code>command_received_ns</code>、<code>scheduled_ns</code>、<code>applied_ns</code>、<code>state_captured_ns</code>、目标tick、sequence和chunk_index。计划时刻为<code>epoch_ns+(tick+1)*period_ns</code>；实际延迟按记录计算。动作未执行、过期或被覆盖时不能伪造applied_ns。</p>
+<p>仿真模式的延迟单位是逻辑tick，必须标为simulation_tick；不要把假定的tick×dt写成实测monotonic_ns。真实硬件回传需保留实际HID采样时刻，不能用期望动作的submitted_ns替代。</p>
+<p><code>AsyncGamepad.step</code>的审计信息把请求和执行分开：调用参数是本次请求的<code>[L,20]</code>；<code>submitted_sequence</code>是本次请求序号；<code>executed_reports[K,20]</code>、<code>executed_sources[K]</code>与<code>execution_ticks[K]</code>逐tick记录实际消费的报告、来源序号和逻辑tick；<code>tick_rewards[K]</code>记录同一批底层奖励。四个执行数组的长度必须等于<code>ticks_advanced=K</code>。来源为-1表示中立fallback；来源不是本次<code>submitted_sequence</code>时，报告可能来自更早的chunk。上述tick字段都不是纳秒时间。</p>
+<h2>3. 最小执行包</h2>
+<pre>from resnake_gym.protocol import GamepadCommand
+# 以下转换只在执行边界；VLA条件路径继续保留原Torch张量。
+packet = GamepadCommand(
+    sequence=sequence, origin_tick=snapshot["controller_tick"],
+    observation_tick=snapshot["capture_tick"], clock_id=snapshot["clock_id"],
+    observation_captured_ns=snapshot["observation_captured_ns"],
+    observation_received_ns=snapshot["observation_received_ns"],
+    inference_started_ns=inference_start, inference_completed_ns=inference_end,
+    submitted_ns=submit_time, reports=reports_numpy,
+)
+wire = packet.to_wire()  # 包含contract_version及layout，便于记录／传输</pre>
+<h2>4. 场景观测与兼容性</h2>
+<p>现有ReSnake-v1仍为9通道、不带扰动的接口，不改其含义。新入口为<code>resnake_gym/ReSnakePerturbed-v1</code>，直接构造类为<code>resnake_gym.envs.perturbed_gamepad.PerturbedGamepadEnv</code>。观测版本<code>scene-grid-v2</code>，形状<code>[14,S,S]</code>，S=max(初始宽,初始高)，默认31×20棋盘对应31×31画布。矩形旋转交换实际宽高，不缩放、不截断。</p>
+<table><tr><th>通道</th><th>含义</th></tr>
+<tr><td>0—4</td><td>蛇身占用、身体顺序rank/长度、蛇头、蛇尾、食物。蛇头rank=长度、蛇尾rank=1、空地rank=0。</td></tr>
+<tr><td>5—8</td><td>上、右、下、左四个朝向平面：只有蛇头位置的对应平面为1，其余为0。前9通道和padding的语义保持不变。</td></tr>
+<tr><td>9</td><td>已生效障碍，1为致死格。</td></tr>
+<tr><td>10</td><td>有效棋盘mask；0为padding，不能视为空地。</td></tr>
+<tr><td>11</td><td>已预告、尚未生效的障碍。</td></tr>
+<tr><td>12</td><td>预告顺时针旋转的四分之一圈数÷3；无旋转为0。</td></tr>
+<tr><td>13</td><td>距生效剩余tick÷notice_ticks；无预告为0。</td></tr></table>
+<p>12、13在有效棋盘上广播。预告也是场景的一部分，随画面一起延迟／丢帧，不向策略另开即时通知。训练线程需适配14通道与mask，不能把9通道旧权重直接称作扰动策略。转动的是蛇、食物、障碍及蛇当前朝向；手柄的上／下／左／右始终按屏幕坐标解释。</p>
+<p><strong>当前实验配置关闭随机旋转。</strong><code>random_rotation</code>默认为false，因此自动扰动只提议障碍；训练与实时预览也显式传入false。<code>request_rotation()</code>仍保留给确定性的接口测试，旋转／混合闭环对照会显式启用该开关，不能与当前训练分布混写。</p>
+<pre>from resnake_gym.envs.perturbed_gamepad import PerturbedGamepadEnv
+from resnake_gym.wrappers.gamepad_async import AsyncGamepad
+env = AsyncGamepad(
+    PerturbedGamepadEnv(width=31, height=20, logic_fps=10,
+        perturbation_interval=(20,40), notice_ticks=6, protected_ticks=3),
+    chunk_length=8, decision_ticks=(2,5),
+    observation_delay=(0,3), command_delay=(0,2), frame_drop_probability=.1)
+obs, info = env.reset(seed=520000)
+# env.step接受[L,20]；上述配置是事件仿真，不是实测实时性能。</pre>
+<p>异步包装器自动提供待执行动作前缀供扰动生成器检查。直接使用裸环境时，须在每次step前调用<code>set_committed_reports([protected_ticks,20])</code>；缺少前缀时扰动会被拒绝，不会默认为安全。此接口仅检验生成的场景，不修改策略报告。</p>
+<p>障碍候选为散点、直线和相邻块，配置范围默认<code>obstacle_batch_size=(1,6)</code>。自动采样先按障碍容量及当前验证路径筛大小：只能使用覆盖环证书时，剩余自由格必须为偶数；同步小图可进入完整状态搜索时保留奇数大小。它不筛候选位置，也不重抽到验证成功。手动<code>request_obstacles</code>不受这项自动筛选约束。reset/step的info记录obstacle_sampler、obstacle_size_filter、obstacle_batch_size、solver_mode和solver_budget；当前同步版本为mixed-shapes-certificate-domain-v2，异步为mixed-shapes-lookahead-certificate-domain-v2，大小筛选版本为cycle-certificate-count-v1。异步候选还额外避开当前蛇身及蛇头notice_ticks+protected_ticks步的曼哈顿范围，因此不能把两者当成同一扰动分布。验证只在环境端执行，不作为模型输入。</p>
+<p>激活事件新增<code>validation</code>：status为solvable／unsolvable／unknown，另含reason、objective、verifier_version、cycle_nodes、states、elapsed_ns、proof_sha256、budget。前缀直接胜负只记录简化状态与目标；未进入验证时为null。event.status仍为applied／rejected；unknown会导致rejected，但不意味着数学无解。部分失败发生在候选生成阶段，没有validation字段。诊断读取时应使用get，不应把这些info交给策略。</p>
+<p>评估JSON包含validation_counts；CLI可用<code>--solver-time-ms</code>调整预算。裸环境默认solver_mode="sync"、50ms；RealTimeGame的扰动环境默认solver_mode="async"，未指定solver_budget时预算为notice_ticks/logic_fps秒。异步的重搜索在独立进程进行，生效step只做快速复核。详细结果见<a href="solvability.html">验证器说明</a>。</p>
+<p>异步预告事件新增request_id（episode标识与递增编号）、snapshot_tick、map_revision、clock_id、submitted_ns、solve_deadline_ns、submitted。validation记录solver_started_ns、solver_completed_ns、result_received_ns、checked_ns、revalidated_ns及snapshot_verdict；尚未获得结果时相应字段不存在。snapshot_verdict只针对旧快照，不能作为生效局面的结论。证书路径、序号表和完整快照不进入info或策略观测。</p>
+<p>到activate_tick时没有结果就返回async_not_ready，不等待、不顺延。世界版本不匹配、结果完成超时、当前身体不兼容、占用冲突分别记录不同原因。复核失败一般是unknown，不是新局面已证无解。重开后旧任务结果按request_id丢弃；队列有界，拥塞时跳过提交。RealTimeGame将同主机求解进程与动作执行统一到同一clock_id，独立使用环境时有自己的单调时钟域标签。</p>
+<p>异步只复用经过检查的覆盖环证书，不复用旧状态精确博弈的布尔结论。快速事件仿真若启用async，逻辑帧可能先于墙钟求解跑完；训练端仍应显式选择模式，并记录截止失败率。调用close释放后台进程；spawn入口应置于if __name__ == "__main__"保护下，daemon式向量环境不能直接再创建子进程。</p>
+<h2>5. 实际反馈和验收边界</h2>
+<p>游戏侧独立训练可直接执行模型报告；机械联合阶段只把实际手柄报告送入游戏，期望报告只作为VLA条件。执行器、验证器的内部安全证书不提供给策略，不采集为示范，不替策略选动作。未通过实时或闭环验收时，日志不得输出“联合任务成功”。</p>
+<h2>6. 实时入口与训练线程交接</h2>
+<p><code>resnake_gym.realtime.RealTimeGame(RealTimeConfig(...))</code>在独立进程推进游戏，<code>observe()</code>取得最近已送达快照，<code>submit(GamepadCommand)</code>非阻塞提交。推理不暂停游戏；队列满可丢观测，命令队列满显式报错。操作系统或场景检验耗时导致的超期会记录，不承诺硬实时。退出时调用close，或使用with。</p>
+<p><code>observation_available_ns</code>是注入延迟后游戏端可发布时刻，<code>snapshot_published_ns</code>是快照发布时刻，<code>snapshot_received_ns</code>是控制端本次接收时刻。<code>observation_received_ns</code>保留同一画面第一次送达控制端的时间，重复画面不会刷新成“新鲜”观测。<code>applied_ns</code>当前表示虚拟游戏开始消费报告，不是物理手指接触或HID采样时刻。</p>
+<p><code>policy_observation(snapshot, previous_decision_tick=..., previous_capture_tick=..., chunk_length=8, history_limit=128)</code>去掉诊断info和证书，输出与AsyncGamepad同名的七项：board、report、timing、history、history_mask、previous_chunk、previous_age。history只含上次决策至今实际执行的报告；超出缓存会报错，不静默截断。timing为帧龄秒数、距上次决策秒数、是否新画面；这里秒数仍由逻辑tick换算，<strong>实测纳秒时间以原始快照和动作包为准</strong>。history容量可与仿真不同，模型须使用mask处理有效长度。</p>
+<p>两个执行入口接收<code>--policy module:factory</code>。factory()返回具有<code>reset(seed=...)</code>、<code>act(observation)→numpy.float32[L,20]</code>的适配器；必须在返回前完成GPU结果同步／拷贝，不能把仅提交CUDA任务的时刻记为推理结束。反事实诊断另需<code>fork()</code>复制循环隐状态，可以共享只读权重。模型和checkpoint加载由训练线程实现，本线程不另训一个替代模型。</p>
+<p>默认仿真反馈把实际手柄报告视为即时可读。以后若HID或机械反馈也有延迟，须为该流增加独立采样／接收时间，不能复用画面时间或期望动作时间。跨主机校准、网络传输和物理HID回传尚未实现；不得仅改clock_id就绕过校验。完整限制见<a href="task123-design.html">任务1—3设计说明</a>。</p>
+<h2>7. 可选策略时间输入 policy-time-v2</h2>
+<p>20维手柄排列不变，原始纳秒字段不变。AsyncGamepad和policy_observation增加可选参数time_features=True；默认False，旧调用方不会突然多出字段。新PPO训练启用它。raw动作头checkpoint为<code>gamepad-ppo-v3 / snake-causal-marginal-v1</code>；dpad5动作头为<code>gamepad-ppo-v4 / snake-dpad5-categorical-v1</code>。两者同时校验<code>food-quota-v1</code>、<code>stored-state-burnin-v1</code>和<code>success-snapshot-sil-v2</code>，不能静默互载。循环IMPALA路径改为<code>gamepad-vtrace-v3 / fifo-stitched-credit-trace-v3 / stored-state-burnin-window-tbptt-v5</code>，传输包为<code>gamepad-vtrace-fragment-v5</code>，另有<code>gamepad-vtrace-credit-trace-v1</code>和<code>gamepad-vtrace-credit-assembler-v2</code>。J8目标为<code>snake-dpad5-event-trace-vtrace-v2 / xinput-dpad5-categorical-v1</code>；H1目标为<code>snake-held-dpad5-event-trace-vtrace-h1-v2 / xinput-held-dpad5-categorical-h1-v1</code>。H1只采样一个五分类变量，再把同一20维报告重复为完整chunk；重复槽不重复计算概率。两者的动作头、目标版本、动作编码、变量数和模型形状都会交叉校验，不能互载；旧v2 V-trace checkpoint和v4 fragment直接拒绝。H1只是因果信用诊断，细节见<a href="held-dpad5-diagnostic.md">H1动作头说明</a>；训练细节见<a href="vtrace-progress-replay-design.md">V-trace长程信用设计</a>。</p>
+<p>V-trace actor在取食、参数同步或达到传输长度时可以封存fragment，但只有死亡和time-limit truncation才reset游戏。fragment用<code>fragment_sequence</code>和<code>decision_start/decision_end</code>标出同一episode内的连续区间；learner还检查观测、分数、执行tick、命令origin tick及提交序号连续，缺失、重复和乱序都报错。相邻fragment拼成完整credit trace，到取食、terminal、truncation、<code>credit_trace_max_transitions</code>安全界或恢复边界才封口。默认安全界为2048 transition；完整trace先做一次无梯度V-trace目标递推，再以不超过128步的BPTT窗口累积梯度，所有窗口合计只执行一次optimizer step。behavior log probability和policy version逐transition保存，trace跨参数同步时不拿单一版本代替。正式训练入口不提供孤立fragment replay参数，也不创建replay对象；旧实现只在<code>resnake_gym.experimental</code>中保留。主预算按第一次收到fragment时的<code>cumulative_received_logic_ticks</code>计数；trained、pending assembler与ready queue之和必须守恒。checkpoint的<code>runtime.pt</code>保存pending和ready assembler状态；恢复时旧generation的pending前缀转成显式<code>resume</code> bootstrap trace，新actor不与其拼接。</p>
+<table><tr><th>字段</th><th>形状与含义，单位均为秒</th></tr>
+<tr><td>time_context</td><td>float32[5]：画面年龄、距上次决策时间、逻辑周期、快照发布至本次决策时间、最近实际报告消费至本次决策时间。</td></tr>
+<tr><td>target_dt</td><td>float32[L]：每个报告的目标执行时刻减去本次决策时刻。真实入口可为负，表示该槽已过期；不得把负值截为零或平移动作块。</td></tr>
+<tr><td>history_age</td><td>float32[K]：每个实际报告的年龄，与history逐行对应，history_mask决定有效行，padding为0。</td></tr></table>
+<p>事件仿真在tick边界决策：快照和最新报告年龄为0，target_dt=(1…L)/fps。真实入口使用同一monotonic时钟上的整数纳秒先相减，再转float32秒；不把绝对纳秒直接转成float32。传decision_ns及previous_decision_ns，第一次没有上次时间时才以elapsed_ticks/fps代替决策间隔。这里报告年龄仍是虚拟消费时间，不能冒充物理HID时间。</p>
+<p>实时CLI使用--timing-v2；闭环评估CLI也需显式加--timing-v2。新模型插件为resnake_gym.ppo_adapter:from_environment，RESNAKE_CHECKPOINT指定GPU节点权重路径，RESNAKE_DEVICE指定设备。act返回前完成CPU拷贝，fork复制循环状态。仿真中的零快照年龄与真实入口中的非零年龄仍有分布差异，字段接通不等于完成延迟鲁棒性训练。</p>
+<p>依据：<a href="https://learn.microsoft.com/en-us/windows/win32/api/xinput/ns-xinput-xinput_gamepad">XInput</a>、<a href="https://arxiv.org/abs/1611.01144">Gumbel-Softmax</a>、<a href="https://arxiv.org/abs/2506.07339">RTC的目标时刻与延迟讨论</a>。字段排列、时钟封装和降级规则是本项目的工程契约。</p></html>

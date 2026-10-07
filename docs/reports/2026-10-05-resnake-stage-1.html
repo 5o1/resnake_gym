@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="ReSnake project">
+<meta name="description" content="ReSnake 游戏环境与强化学习阶段报告">
+<title>ReSnake 阶段一：游戏环境与强化学习基线</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg:#f5f5f3; --card:#fcfcfb; --border:#e3e2de; --grid:#ebeae6;
+  --text:#0b0b0b; --text2:#52514e; --muted:#7a7974; --note:#eef4fc; --warn:#fdf3e0;
+  --blue:#2a78d6; --orange:#eb6834; --green:#1baf7a; --yellow:#eda100; --red:#b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme:dark; --bg:#121211; --card:#1a1a19; --border:#33332f; --grid:#2a2a27;
+    --text:#fff; --text2:#c3c2b7; --muted:#8f8e86; --note:#1b2533; --warn:#2d2416;
+    --blue:#3987e5; --orange:#d95926; --green:#42bd88; --yellow:#c98500; --red:#f2a59d;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme:dark; --bg:#121211; --card:#1a1a19; --border:#33332f; --grid:#2a2a27;
+  --text:#fff; --text2:#c3c2b7; --muted:#8f8e86; --note:#1b2533; --warn:#2d2416;
+  --blue:#3987e5; --orange:#d95926; --green:#42bd88; --yellow:#c98500; --red:#f2a59d;
+}
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body { margin:0; background:var(--bg); color:var(--text);
+  font:15px/1.7 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+main { max-width:980px; margin:0 auto; padding:32px 16px 64px; }
+h1 { font-size:26px; line-height:1.35; margin:0 0 4px; }
+h2 { font-size:20px; margin:40px 0 8px; padding-top:10px; border-top:1px solid var(--border); }
+h3 { font-size:17px; margin:26px 0 6px; }
+p { margin:8px 0; }
+.sub { color:var(--text2); margin:0 0 18px; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin:14px 0; }
+.note { background:var(--note); border-radius:8px; padding:10px 14px; margin:12px 0; }
+.warn { background:var(--warn); border-radius:8px; padding:10px 14px; margin:12px 0; }
+.status { border-left:4px solid var(--yellow); }
+.decision { border-left:4px solid var(--blue); }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+@media (max-width:720px) { .grid2 { grid-template-columns:1fr; } }
+.toc { columns:2; font-size:14px; }
+.toc a, a { color:var(--blue); }
+.toc a { text-decoration:none; }
+@media (max-width:640px) { .toc { columns:1; } }
+table { border-collapse:collapse; width:100%; font-size:13px; margin:6px 0; }
+th,td { border-bottom:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top; }
+th { color:var(--text2); font-weight:600; }
+td.num,th.num { text-align:right; white-space:nowrap; }
+.scroll { overflow-x:auto; }
+code { font-size:13px; background:var(--note); padding:1px 4px; border-radius:4px; }
+pre { background:var(--note); border:1px solid var(--border); border-radius:8px; padding:11px 13px;
+  overflow:auto; font:12.5px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.metric { font-size:25px; line-height:1.25; font-weight:650; color:var(--blue); }
+.metric small { display:block; font-size:12px; color:var(--text2); font-weight:400; }
+.muted,.caption { color:var(--text2); font-size:13px; }
+.ok { color:var(--green); font-weight:600; }
+.bad { color:var(--red); font-weight:600; }
+.barrow { display:grid; grid-template-columns:90px 1fr 75px; gap:8px; align-items:center; margin:7px 0; font-size:13px; }
+.bartrack { height:13px; background:var(--grid); border-radius:3px; overflow:hidden; }
+.bar { height:100%; background:var(--blue); }
+.matrix td,.matrix th { text-align:center; }
+.matrix td:first-child,.matrix th:first-child { text-align:left; }
+video { display:block; width:min(100%,560px); margin:12px auto; background:#000; border-radius:8px; }
+details { font-size:13px; margin:8px 0; }
+summary { cursor:pointer; color:var(--text2); }
+.ref { font-size:13.5px; }
+.ref li { margin:7px 0; }
+button.theme { float:right; font-size:12px; background:var(--card); color:var(--text2); border:1px solid var(--border);
+  border-radius:6px; padding:3px 8px; cursor:pointer; }
+@media print {
+  :root { color-scheme:light; --bg:#fff; --card:#fff; --border:#d8d8d3; --grid:#ecece8;
+    --text:#000; --text2:#444; --muted:#666; --note:#f3f7fc; --warn:#fff5e5; --blue:#1c63ae; }
+  body { background:#fff; font-size:10.5pt; }
+  main { max-width:none; padding:10mm 12mm; }
+  button.theme,video { display:none; }
+  h2 { break-after:avoid; }
+  .card,.note,.warn,table,pre { break-inside:avoid; }
+  a { color:inherit; text-decoration:none; }
+  a[href^="http"]::after { content:""; }
+}
+</style>
+</head>
+<body>
+<main>
+<button class="theme" id="theme" type="button">切换深浅色</button>
+<h1>ReSnake 阶段一：先把游戏环境和学习链路跑通</h1>
+<p class="sub">2026-10-05 · 工作树快照（基于 HEAD <code>dbfbae8</code>，含未提交实现）· 默认 31×20 · Python 3.11.16 · 正式实验 PyTorch 2.14.1 / SB3 2.9.0 · 阶段报告</p>
+
+<div class="warn status"><b>证据范围</b>：本轮只完成贪吃蛇游戏、Gymnasium 接口、训练、严格评测和视频工件。双 ROKAE AR5、双 LinkerHand G20、实体 Xbox 手柄及 HID 链路尚未接入。文中的“通关”只指软件环境中把蛇增长到占满棋盘。</div>
+
+<div class="card toc">
+<a href="#abs">摘要</a><br>
+<a href="#why">1. 为什么先做游戏侧</a><br>
+<a href="#env">2. 环境与成功判据</a><br>
+<a href="#impl">3. 实现与吞吐</a><br>
+<a href="#methods">4. 三条训练路线</a><br>
+<a href="#protocol">5. 实验协议</a><br>
+<a href="#results">6. 结果</a><br>
+<a href="#video">7. 视频与复核</a><br>
+<a href="#failures">8. 失败与解释边界</a><br>
+<a href="#tutorial">9. 复现教程</a><br>
+<a href="#robot">10. 与机器人阶段的接口</a><br>
+<a href="#limits">11. 限制与下一步</a><br>
+<a href="#artifacts">附录 A：工件</a><br>
+<a href="#refs">参考文献</a>
+</div>
+
+<h2 id="abs">摘要</h2>
+<div class="note">
+<p>本轮交付的是一个可调逻辑帧率的贪吃蛇环境和一条可复现的学习链路。每次观测是完整棋盘的 9 通道数组；每次动作可选择绝对方向，也可选择直行、左转或右转。评测只在蛇占满棋盘时计为成功，碰撞和达到步数上限都算失败。</p>
+<p>默认 31×20 环境的完整单步吞吐为每秒 46,572–49,311 个逻辑步，蛇长从 3 增至 558 时下降约 5.6%。在 4×4 棋盘上，用 PyTorch 2.14.1 从零训练的 PPO，在 10,000 个共同评测 seed 中，距离塑形版成功 9,984 次，无距离塑形版成功 9,993 次。两者都接近满分，但数据不支持“曼哈顿距离奖励会提高成功率”。在 31×20 棋盘上，Hamiltonian 教师生成的行为克隆模型为 100/100；这条结果依赖教师结构，不能写成纯强化学习。</p>
+<p>8×8 的 BC+PPO 模型已经生成 33.23 秒的视频，录像脚本用两次 rollout 的轨迹哈希确认回放一致。当前工作支持下一阶段把游戏策略输出定义为目标手柄动作；它还没有回答 G20 能否稳定持握和操作实体手柄。</p>
+</div>
+
+<div class="grid2">
+  <div class="card"><div class="metric">49,311<small>31×20、蛇长 3，完整环境逻辑步/秒</small></div></div>
+  <div class="card"><div class="metric">9,993 / 10,000<small>4×4、无距离塑形、严格填满棋盘</small></div></div>
+  <div class="card"><div class="metric">100 / 100<small>31×20、Hamiltonian 行为克隆</small></div></div>
+  <div class="card"><div class="metric">69 / 69<small>当前工作树本地测试通过</small></div></div>
+</div>
+
+<h2 id="why">1. 为什么先做游戏侧</h2>
+<div class="card">
+<p>整个课题包含两个不同的未知量。游戏策略要根据棋盘状态决定下一步；机器人要把目标动作落实到实体手柄。若两部分同时启动，游戏失败后很难判断是策略选错方向，还是手指没有按到目标控件。</p>
+<p>本研究先固定第一段接口：</p>
+<pre>完整游戏状态 → 游戏策略 → 目标动作
+                              │
+                              └─ 下一阶段再交给双臂、双手和实体手柄</pre>
+<p>阶段一的验收对象不是机器人动作，而是“同一个 seed、同一个 checkpoint 能否把棋盘填满”。后续机械臂实验可以复用相同策略，同时记录目标动作与真实 HID 输出之间的差值。这样，游戏策略误差和物理执行误差能够分别统计。</p>
+</div>
+
+<h2 id="env">2. 环境与成功判据</h2>
+<h3>2.1 Gymnasium 接口</h3>
+<div class="card">
+<p>环境注册名为 <code>resnake_gym/ReSnake-v0</code>。它实现 <code>reset()</code>、<code>step()</code>、<code>render()</code> 和 <code>close()</code>，并把任务结束与时间截断分开返回。这个返回形式与 Gymnasium 当前的环境接口一致 [1]。</p>
+<p>默认棋盘宽 31 格、高 20 格，共 620 格。坐标原点在左上角，横轴向右，纵轴向下。初始蛇长为 3。一次智能体动作可以推进一个或多个逻辑 tick；<code>logic_fps</code> 决定一个游戏秒包含多少 tick，<code>frame_skip</code> 决定一次策略调用推进多少 tick。逻辑速度只改变模拟时间，不要求程序真的等待。</p>
+</div>
+
+<h3>2.2 观测和动作</h3>
+<div class="scroll"><table>
+<thead><tr><th>通道</th><th>数组中的含义</th><th>取值</th></tr></thead>
+<tbody>
+<tr><td>蛇身</td><td>当前被蛇占用的格子</td><td>占用为 1，其余为 0</td></tr>
+<tr><td>身体顺序</td><td>从尾到头的相对位置</td><td>尾部为 1/蛇长，头部为 1</td></tr>
+<tr><td>蛇头</td><td>头部所在格</td><td>one-hot</td></tr>
+<tr><td>蛇尾</td><td>尾部所在格</td><td>one-hot</td></tr>
+<tr><td>食物</td><td>食物所在格</td><td>one-hot</td></tr>
+<tr><td>朝上、右、下、左</td><td>四个方向通道；当前方向对应通道的蛇头格为 1</td><td>四选一的 one-hot</td></tr>
+</tbody></table></div>
+<p class="caption">观测形状为 <code>(9, H, W)</code>，数据类型为 float32；默认 31×20 时每份观测占 22,320 字节。</p>
+
+<div class="grid2">
+<div class="card"><p><b>绝对动作</b></p><p>四个动作分别表示上、右、下、左。若动作与当前方向相反，环境保持原方向，避免蛇头立刻折回脖子。</p></div>
+<div class="card"><p><b>相对动作</b></p><p>三个动作分别表示直行、右转、左转。学习实验使用这一模式，使动作含义不随棋盘朝向改变。</p></div>
+</div>
+
+<h3>2.3 唯一的严格胜利</h3>
+<div class="decision card">
+<p><b>严格通关</b>同时满足三项：环境返回 <code>terminated=True</code>，<code>won=True</code>，并且 <code>termination_reason="board_filled"</code>。碰墙、自撞、到达时间上限和程序截断都不计胜利。</p>
+<p>默认步数上限为 <span>N(N+1)/2</span>，其中 N 是棋盘格数。31×20 的上限为 192,510 个逻辑步。这个上限给策略足够时间吃完 617 个食物，同时阻止无限循环。</p>
+</div>
+
+<h2 id="impl">3. 实现与吞吐</h2>
+<div class="card">
+<p>碰撞检测用一个坐标集合查询，蛇身本身用双端队列保存。观测中的身体顺序另存为稠密整数网格，因此生成观测时不需要逐段搜索。批量评测不使用 Gymnasium 的通用向量包装器，而是维护一组独立环境，把仍在运行的观测一次送入策略，再逐个推进环境。这样既保留 seed 顺序，又减少每一步的模型调用次数。</p>
+<p>下图测量完整的 <code>SnakeEnv.step</code>：包括动作应用、一个逻辑 tick、下一份观测、奖励和诊断信息；不含模型推理、reset、渲染和一个预热窗口。</p>
+<div class="barrow"><span>长度 3</span><span class="bartrack"><span class="bar" style="display:block;width:100%"></span></span><span class="num">49,311/s</span></div>
+<div class="barrow"><span>25%（155）</span><span class="bartrack"><span class="bar" style="display:block;width:95.82%"></span></span><span class="num">47,248/s</span></div>
+<div class="barrow"><span>50%（310）</span><span class="bartrack"><span class="bar" style="display:block;width:95.50%"></span></span><span class="num">47,092/s</span></div>
+<div class="barrow"><span>90%（558）</span><span class="bartrack"><span class="bar" style="display:block;width:94.44%"></span></span><span class="num">46,572/s</span></div>
+<p class="caption">机器：Linux x86-64，Python 3.11.16，Gymnasium 1.3.0，NumPy 2.4.6。每种长度测量约 1 秒；结果只描述这台 GPU 节点上的 Python 单进程环境。</p>
+</div>
+
+<h2 id="methods">4. 三条训练路线</h2>
+<h3>4.1 从零训练 PPO</h3>
+<div class="card">
+<p>近端策略优化（Proximal Policy Optimization，PPO）让策略与环境交互采样，再对同一批样本做多轮小批量更新 [2]。本项目用 Stable-Baselines3 的实现，策略和值函数各含两层 256 单元的 SiLU 多层感知器。输入是展平后的 9 通道棋盘，输出是三个相对动作的概率。</p>
+<p>正式 4×4 实验从随机参数开始。选择 4×4 是为了先确认稀疏终局奖励能够被学到，再扩展棋盘。64 个环境同步采样，每轮每个环境走 128 步。请求训练 1,000,000 步；由于 rollout 必须完整结束，实际得到 1,007,616 步。</p>
+</div>
+
+<h3>4.2 Hamiltonian 教师与行为克隆</h3>
+<div class="card">
+<p>当矩形棋盘至少有一条边为偶数时，代码构造一条经过每格一次并回到起点的 Hamiltonian 环。蛇沿该环前进不会撞到自身，最终一定能填满棋盘。训练脚本在线采样“蛇头位置、当前朝向”组合，用教师动作作为标签，并用交叉熵训练 PPO 网络中的策略头。三个相对动作按相同数量采样，避免直行动作占据大多数 batch。</p>
+<p>这条路线是带强结构先验的监督学习。它检验网络、观测和动作接口能否无误复现一个已知解，不检验模型能否自行发现该解。</p>
+</div>
+
+<h3>4.3 行为克隆之后再做 PPO</h3>
+<div class="card">
+<p>第三条路线从行为克隆 checkpoint 恢复，再让 PPO 与环境交互。8×8 微调 507,904 步；31×20 微调 1,003,520 步。评测时仍用填满棋盘作为唯一成功条件。该结果应写作“BC 初始化的 PPO”，不能并入从零强化学习结果。</p>
+</div>
+
+<h2 id="protocol">5. 实验协议</h2>
+<div class="scroll"><table>
+<thead><tr><th>实验</th><th>棋盘</th><th>训练 seed</th><th>训练量</th><th>关键奖励或来源</th><th>评测</th></tr></thead>
+<tbody>
+<tr><td>历史 PPO smoke</td><td>4×4</td><td>2026</td><td>106,496 步</td><td>食物 0.1；无超时惩罚；Torch 2.10</td><td>1000 seeds；只作历史记录</td></tr>
+<tr><td>PPO 距离塑形</td><td>4×4</td><td>2026</td><td>1,007,616 步</td><td>食物 1；死亡/超时 −1；每步 −0.001；距离差×0.1</td><td>共同 seeds 520000–529999</td></tr>
+<tr><td>PPO 对照</td><td>4×4</td><td>2026</td><td>1,007,616 步</td><td>与上一行相同，只把距离差系数设为 0</td><td>共同 seeds 520000–529999</td></tr>
+<tr><td>Hamiltonian BC</td><td>8×8、31×20</td><td>2026</td><td>2,048,000 在线样本</td><td>确定性教师；动作平衡</td><td>分别 1000、100 seeds</td></tr>
+<tr><td>BC+PPO</td><td>8×8、31×20</td><td>2026</td><td>507,904 / 1,003,520 步</td><td>从对应 BC checkpoint 恢复</td><td>8×8 为 1000；31×20 正在补 100</td></tr>
+</tbody></table></div>
+<p>训练和评测 seed 分开。策略预测固定为确定性动作。Stable-Baselines3 文档也建议使用独立评测环境，并指出强化学习结果会随训练 seed 变化，应进行多次训练 [3]。因此，单个训练 seed 的差异只作为本阶段观察；两个追加训练 seed 正在补测。</p>
+
+<h3>5.1 软件版本</h3>
+<div class="card">
+<p>正式实验统一到 Python 3.11.16、PyTorch <b>2.14.1</b> 和 Stable-Baselines3 2.9.0。PyTorch 基金会在 2026 年 9 月发布 2.14，2.14.1 的二进制在 9 月 30 日发布 [4,5]。项目依赖已约束为 <code>torch&gt;=2.14.1,&lt;2.15</code>。</p>
+<p>最早的 0/1000 smoke test 使用节点中原有的 PyTorch 2.10.0。它保留在表中是为了说明排查过程，不参加正式版本内的奖励比较。2.14.1 环境同时提供 cu126 构建并通过 CUDA 矩阵乘法与反向传播检查；这些小型 MLP 实验的配置选择 CPU 执行。</p>
+</div>
+
+<h2 id="results">6. 结果</h2>
+<h3>6.1 从零 PPO：提高训练预算后，距离塑形没有带来收益</h3>
+<div class="scroll"><table>
+<thead><tr><th>模型</th><th class="num">严格胜利</th><th class="num">观察成功率</th><th class="num">Wilson 95% 区间</th><th class="num">平均逻辑步</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>距离塑形</td><td class="num">9,984 / 10,000</td><td class="num">99.84%</td><td class="num">99.740%–99.901%</td><td class="num">45.274</td><td>16 次失败</td></tr>
+<tr><td>无距离塑形</td><td class="num">9,993 / 10,000</td><td class="num">99.93%</td><td class="num">99.856%–99.966%</td><td class="num">45.464</td><td>7 次失败</td></tr>
+</tbody></table></div>
+<p class="caption">区间按 Wilson 记分区间计算 [6]。它表示有限样本带来的不确定性；100% 的观察值也会得到低于 100% 的下界。</p>
+
+<div class="grid2">
+<div class="card">
+<p><b>同 seed 的配对结果</b></p>
+<table class="matrix"><tr><th></th><th>无塑形成功</th><th>无塑形失败</th></tr>
+<tr><th>塑形成功</th><td>9,980</td><td>4</td></tr>
+<tr><th>塑形失败</th><td>13</td><td>3</td></tr></table>
+<p class="caption">17 个不一致 seed 中，无塑形模型单独成功 13 次，塑形模型单独成功 4 次。双侧精确配对检验 p=0.049；这只是一个训练 seed 的探索性结果。</p>
+</div>
+<div class="card">
+<p><b>训练耗时</b></p>
+<table><tr><th>模型</th><th class="num">实际步数</th><th class="num">墙钟时间</th></tr>
+<tr><td>距离塑形</td><td class="num">1,007,616</td><td class="num">90.52 s</td></tr>
+<tr><td>无距离塑形</td><td class="num">1,007,616</td><td class="num">91.21 s</td></tr></table>
+<p class="caption">两次正式训练均记录为 PyTorch 2.14.1；墙钟时间来自各自的训练摘要。</p>
+</div>
+</div>
+
+<p>早期 10 万步实验的 0/1000 与正式实验的接近满分不能只归因于某一个开关：训练预算增至约 100 万步，同时食物奖励从 0.1 提高到 1，并加入超时惩罚。严格对照只改变距离塑形系数，结果反而略偏向无塑形模型。一个可能原因是曼哈顿距离只评价眼前靠近食物，不能表示长蛇是否把自己围住；本轮没有直接测量内部状态，故不把这个解释写成结论。</p>
+
+<h3>6.2 行为克隆与 BC+PPO</h3>
+<div class="scroll"><table>
+<thead><tr><th>模型</th><th>棋盘</th><th class="num">严格胜利</th><th class="num">Wilson 95% 区间</th><th class="num">平均逻辑步</th><th>能够说明什么</th></tr></thead>
+<tbody>
+<tr><td>Hamiltonian BC</td><td>8×8</td><td class="num">1000 / 1000</td><td class="num">99.617%–100%</td><td class="num">976.701</td><td>网络完整复现教师</td></tr>
+<tr><td>BC+PPO</td><td>8×8</td><td class="num">1000 / 1000</td><td class="num">99.617%–100%</td><td class="num">976.552</td><td>微调没有破坏成功率</td></tr>
+<tr><td>Hamiltonian BC</td><td>31×20</td><td class="num">100 / 100</td><td class="num">96.301%–100%</td><td class="num">95,934.02</td><td>默认棋盘可严格填满</td></tr>
+<tr><td>BC+PPO</td><td>31×20</td><td class="num">10 / 10</td><td class="num">72.246%–100%</td><td class="num">95,362.6</td><td>同 10 seeds 动作轨迹未改变；100 局待完成</td></tr>
+</tbody></table></div>
+<p>31×20 的 BC 用 2,048,000 个在线样本训练 73.29 秒，最终交叉熵为 1.186×10<sup>−4</sup>，穷举探针准确率为 1.0。PPO 再训练约 100 万步后，同一组 10 个 seed 的每局逻辑步数与微调前完全一致。这更像是策略被保留下来，而不是策略得到改进。</p>
+
+<h3>6.3 批量评测开销</h3>
+<div class="card">
+<p>31×20 BC 的 100 局评测共执行约 959 万个逻辑步，耗时 352.13 秒，即每秒 27,244 个“环境步 + 批量策略推理”。裸环境在长蛇状态约为每秒 46,572 个逻辑步，因此在这个设置里，模型推理与批处理管理消耗了约四成的可用吞吐。这个比例只适用于当前两层 MLP、batch 100 和 CPU 线程设置。</p>
+</div>
+
+<h2 id="video">7. 视频与复核</h2>
+<div class="card">
+<p>下面的演示来自 8×8 BC+PPO checkpoint，seed 为 300000。该局在 996 个逻辑步后填满 64 格，最终得分 61。视频为 H.264、384×384、30 fps，共 997 帧和 33.23 秒。</p>
+<video controls preload="metadata" poster="assets/ppo_ft_bc_8x8_seed300000-poster.png">
+  <source src="assets/ppo_ft_bc_8x8_seed300000.mp4" type="video/mp4">
+  当前浏览器无法播放 H.264；可按附录路径在 GPU 节点读取原文件。
+</video>
+<p class="caption">视频 SHA-256：<code>0d68838f8bbc7adf92c7e38741c695e8699196523715c503151724a3acc28632</code>。模型 SHA-256：<code>d0bd48cdb58c4f45161fb15e3c63b579fa281a725c037259759a08c4f047cf4d</code>。完整轨迹摘要：<code>99525377020996e176233c0c914e8170816b0d55159083e19d7642ef3486cebf</code>。</p>
+<p>录像程序先跑一遍得到终止 tick 和轨迹哈希，再按固定抽帧计划跑第二遍并直接把 RGB 帧送给 ffmpeg。两遍的轨迹哈希不一致时不保留成品；输出先写临时文件，编码完成后再原子替换。这个检查防止评测局与录像局因 seed 或模型差异而错配。</p>
+</div>
+
+<h2 id="failures">8. 失败与解释边界</h2>
+<div class="card">
+<ul>
+<li><b>旧 PPO 停滞：</b>10 万步模型在 1000 局里一次也没有填满 4×4，平均最终长度只有 3.183。训练预算、奖励比例和 Torch 版本同时变化，旧实验不能用来证明其中某一项导致失败。</li>
+<li><b>距离塑形的反例：</b>等预算比较中，距离塑形没有提高成功率。它仍可能改变学习速度，但本轮只比较最终 checkpoint，没有保存足够密的中间评测来回答这个问题。</li>
+<li><b>单训练 seed：</b>10,000 个评测 seed 只测环境随机性，没有覆盖训练随机性。追加训练 seed 完成前，不把 0.09 个百分点的差异推广到其他训练。</li>
+<li><b>教师上限：</b>Hamiltonian BC 的 100% 来自一个保证安全但路径保守的教师。它不代表模型学会一般性的规划，也不代表在奇×奇棋盘上存在相同构造。</li>
+<li><b>游戏和机器人仍分离：</b>本轮没有测手柄延迟、摇杆误差、G20 接触、双手碰撞或 AR5 控制周期。</li>
+</ul>
+</div>
+
+<h2 id="tutorial">9. 复现教程</h2>
+<h3>9.1 本地安装与接口检查</h3>
+<div class="card">
+<p><b>位置：</b>仓库根目录。<b>环境：</b>Python 3.10 以上；只运行环境不需要 PyTorch。</p>
+<pre>python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[dev,render]"
+pytest -q
+ruff check .
+python examples/random_agent.py</pre>
+<p><b>验收：</b>测试显示 69 passed，Ruff 无错误，示例打印每一步的棋盘或 episode 结果。任何测试失败时先停止训练。</p>
+</div>
+
+<h3>9.2 环境吞吐</h3>
+<div class="card">
+<pre>python scripts/benchmark_env.py \
+  --width 31 --height 20 --seconds-per-length 1 \
+  --output-json /tmp/reference_31x20.json</pre>
+<p><b>验收：</b>JSON 中四个长度的 <code>length_preserved</code> 都为 true，并记录实际测量时间与逻辑步数。该命令不加载策略。</p>
+</div>
+
+<h3>9.3 正式 PPO 对照</h3>
+<div class="card">
+<p><b>位置：</b>GPU 节点 <code>/data/lyy/resnake_gym/repo</code>。<b>环境：</b><code>/data/lyy/resnake_gym/env/rl-torch214-cu126</code>。模型、日志与评测 JSON 均写入 <code>/data/lyy/resnake_gym/artifacts</code>。</p>
+<pre>python scripts/train_ppo.py \
+  --width 4 --height 4 --total-timesteps 1000000 \
+  --n-envs 64 --n-steps 128 --batch-size 512 --n-epochs 4 \
+  --learning-rate 0.0003 --gamma 0.99 --gae-lambda 0.95 \
+  --ent-coef 0.01 --seed 2026 --device cpu --torch-threads 16 \
+  --food-reward 1 --death-reward -1 --living-reward -0.001 \
+  --win-reward 10 --timeout-reward -1 --distance-reward-scale 0 \
+  --output-dir /data/lyy/resnake_gym/artifacts/runs/ppo_control
+
+python scripts/evaluate_policy.py \
+  /data/lyy/resnake_gym/artifacts/runs/ppo_control/final_model.zip \
+  --width 4 --height 4 --episodes 10000 --start-seed 520000 \
+  --batch-envs 256 --torch-threads 16 --device cpu \
+  --require-win-rate 0.99 \
+  --output-json /data/lyy/resnake_gym/artifacts/benchmarks/ppo_control.json</pre>
+<p><b>验收：</b><code>config.json</code> 中 Torch 为 2.14.1；评测进程退出码为 0；JSON 的每个胜局都以 <code>board_filled</code> 结束。低于 99% 时 <code>--require-win-rate</code> 令命令返回非零。</p>
+</div>
+
+<h3>9.4 录像</h3>
+<div class="card">
+<pre>python scripts/record_video.py \
+  --controller ppo \
+  --model /data/lyy/resnake_gym/artifacts/runs/ppo_ft_bc_8x8_seed2026_v1/final_model.zip \
+  --width 8 --height 8 --seed 300000 --cell-size 48 \
+  --output /data/lyy/resnake_gym/artifacts/videos/demo.mp4</pre>
+<p><b>验收：</b>MP4 与同名 JSON 同时存在；sidecar 中 <code>strict_win</code> 为 true，且包含视频、模型和轨迹摘要。轨迹复跑不一致时应把该次录像视为失败。</p>
+</div>
+
+<h2 id="robot">10. 与机器人阶段的接口</h2>
+<div class="card">
+<p>当前相对动作只有直行、右转和左转。接入手柄时，可以先把它们变成离散的目标 HID，例如左摇杆上、右、左；也可以把棋盘策略改为输出标准手柄状态张量。机械臂侧只接收这个目标，不需要重新理解棋盘。</p>
+<pre>9×H×W 游戏状态
+      ↓
+  游戏策略
+      ↓
+目标 HID / 手柄动作 ──→ 双 AR5 + 双 G20 ──→ 实际 HID
+                              ↑                 │
+                              └──── 误差反馈 ───┘</pre>
+<p>下一阶段首先测“目标输入能否被实体执行”，而不是直接用游戏分数训练手指。需要同步保存目标 HID、实际 HID、两只 G20 的关节与触觉、两台 AR5 的状态以及视频。游戏侧已有的 seed、逻辑 tick 和严格终局可以作为统一时钟和结果标签。</p>
+</div>
+
+<h2 id="limits">11. 限制与下一步</h2>
+<div class="card">
+<ol>
+<li>完成两个追加训练 seed，并在相同 10,000 个环境 seed 上评测，区分训练随机性与环境随机性。</li>
+<li>把 31×20 BC+PPO 的严格评测扩展到 100 局；若轨迹仍与 BC 相同，把 PPO 定性为“保持”，不宣称优化。</li>
+<li>记录训练过程中的周期性严格评测，判断奖励塑形影响的是学习速度还是最终策略。</li>
+<li>为从零训练增加棋盘课程：4×4 → 6×6 → 8×8。每一级都要用未见 seed 验收，避免只迁移一个确定性循环。</li>
+<li>进入机器人阶段后，先做目标 HID 轨迹复现；固定手柄与自由持握作为对照条件，而不是预先删去持握问题。</li>
+</ol>
+<p>本报告的结论适用于当前代码快照、列出的 checkpoint 和 seed。它不支持“PPO 已在 31×20 从零学会贪吃蛇”，也不支持“灵巧手已经能玩游戏”。</p>
+</div>
+
+<h2 id="artifacts">附录 A：工件与路径</h2>
+<div class="scroll"><table>
+<thead><tr><th>内容</th><th>GPU 节点路径</th></tr></thead>
+<tbody>
+<tr><td>4×4 无塑形 PPO</td><td><code>/data/lyy/resnake_gym/artifacts/runs/ppo_scratch_control_4x4_seed2026_v2/</code></td></tr>
+<tr><td>4×4 距离塑形 PPO</td><td><code>/data/lyy/resnake_gym/artifacts/runs/ppo_scratch_shaped_4x4_seed2026_v1/</code></td></tr>
+<tr><td>共同 10k seed 评测</td><td><code>/data/lyy/resnake_gym/artifacts/benchmarks/ppo_scratch_*_eval10000_common.json</code></td></tr>
+<tr><td>31×20 BC</td><td><code>/data/lyy/resnake_gym/artifacts/runs/bc_hamiltonian_31x20_seed2026_v1/</code></td></tr>
+<tr><td>31×20 BC+PPO</td><td><code>/data/lyy/resnake_gym/artifacts/runs/ppo_ft_bc_31x20_seed2026_lr1e6_v1/</code></td></tr>
+<tr><td>8×8 视频与 sidecar</td><td><code>/data/lyy/resnake_gym/artifacts/videos/ppo_ft_bc_8x8_seed300000.mp4{,.json}</code></td></tr>
+<tr><td>完整单步吞吐</td><td><code>/data/lyy/resnake_gym/artifacts/benchmarks/reference_31x20.json</code></td></tr>
+</tbody></table></div>
+<details><summary>目录约定</summary>
+<pre>/data/lyy/resnake_gym/
+├── repo/                 # 代码镜像
+├── env/                  # Python / RL 环境
+├── cache/                # 经校验的 wheel 与下载缓存
+└── artifacts/
+    ├── runs/             # checkpoint、config、monitor、TensorBoard
+    ├── benchmarks/       # 评测 JSON
+    └── videos/           # MP4 与 sidecar</pre>
+</details>
+
+<h2 id="refs">参考文献</h2>
+<div class="card ref"><ol>
+<li>Farama Foundation. <a href="https://gymnasium.farama.org/api/env/">Gymnasium Env API</a>. 访问日期：2026-10-05。</li>
+<li>J. Schulman, F. Wolski, P. Dhariwal, A. Radford, O. Klimov. <a href="https://arxiv.org/abs/1707.06347"><i>Proximal Policy Optimization Algorithms</i></a>. arXiv:1707.06347, 2017.</li>
+<li>Stable-Baselines3. <a href="https://stable-baselines3.readthedocs.io/en/master/guide/rl_tips.html">Reinforcement Learning Tips and Tricks</a>. 访问日期：2026-10-05。</li>
+<li>PyTorch Foundation. <a href="https://pytorch.org/blog/pytorch-2-14-release-blog/">PyTorch 2.14 Release Blog</a>. 2026-09-02。</li>
+<li>PyTorch Team. <a href="https://dev-discuss.pytorch.org/t/pytorch-2-14-1-general-availability/3455">PyTorch 2.14.1 General Availability</a>. 2026-09-30。</li>
+<li>E. B. Wilson. <a href="https://doi.org/10.1080/01621459.1927.10502953"><i>Probable Inference, the Law of Succession, and Statistical Inference</i></a>. Journal of the American Statistical Association, 22(158):209–212, 1927.</li>
+</ol></div>
+
+<p class="caption">对应复审记录：<a href="2026-10-05-resnake-stage-1_review.md">2026-10-05-resnake-stage-1_review.md</a>。本文为阶段报告；所有数值均指向附录中的配置、摘要或评测工件。</p>
+</main>
+<script>
+const root=document.documentElement, button=document.getElementById("theme");
+button.addEventListener("click",()=>{
+  const current=root.dataset.theme;
+  root.dataset.theme=current==="dark"?"light":"dark";
+});
+</script>
+</body>
+</html>

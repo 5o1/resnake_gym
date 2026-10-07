@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "resnake-gym"
+version = "0.1.0"
+description = "A controllable-timebase Snake environment for Gymnasium research"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "5o1" }]
+dependencies = [
+    "gymnasium>=1.1,<2",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+render = ["pygame-ce>=2.5"]
+rl = [
+    "imageio-ffmpeg==0.6.0",
+    "sb3-contrib==2.9.0",
+    "stable-baselines3==2.9.0",
+    "tensorboard==2.21.0",
+    "torch>=2.14.1,<2.15",
+]
+dev = [
+    "build>=1.2",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.11",
+]
+
+[project.urls]
+Repository = "https://github.com/5o1/resnake_gym"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+resnake_gym = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

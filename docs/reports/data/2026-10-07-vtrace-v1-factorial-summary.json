@@ -1,0 +1,150 @@
+{
+  "format": "resnake-vtrace-v1-factorial-report-summary-v1",
+  "generated_for_report_date": "2026-10-07",
+  "source_root": "/data/lyy/resnake_gym/vtrace-factorial-20261007/seed2026",
+  "source_checkpoint_format": "gamepad-vtrace-v1",
+  "source_collection_semantics": "fifo-food-quota-v1",
+  "common": {
+    "board": [31, 20],
+    "training_seed": 2026,
+    "chunk_length": 8,
+    "decision_ticks": [2, 5],
+    "observation_delay_ticks": [0, 3],
+    "command_delay_ticks": [0, 2],
+    "frame_drop_probability": 0.1,
+    "random_rotation": false,
+    "gamma": 0.9999,
+    "batch_min_transitions": 2048,
+    "batch_max_transitions": 8192,
+    "received_tick_budget": 1000000,
+    "updates": 143,
+    "final_validation": {
+      "seeds": [610000, 610029],
+      "episodes_per_mode": 30,
+      "modes": ["deterministic", "stochastic"]
+    }
+  },
+  "arms": {
+    "A_fixed_noreplay": {
+      "batch_food_target": 0,
+      "replay_batches_per_update": 0,
+      "received_logic_ticks": 1005710,
+      "food_events": 1460,
+      "food_per_10000_received_ticks": 14.51710731721868,
+      "completed_episodes": 17664,
+      "strict_wins": 0,
+      "score_ge_1": 1378,
+      "score_ge_2": 81,
+      "highest_observed_score": 3,
+      "termination_counts": {
+        "wall_collision": 17618,
+        "self_collision": 27,
+        "obstacle_collision": 19
+      },
+      "batch_transitions": {"mean": 2058.6503496503497, "min": 2048, "max": 2085},
+      "batch_food": {"min": 3, "median": 10, "max": 19},
+      "final_validation": {
+        "deterministic": {"mean_score": 0.0, "max_score": 0, "wins": 0, "mean_ticks": 16.0},
+        "stochastic": {"mean_score": 0.06666666666666667, "max_score": 1, "wins": 0, "mean_ticks": 66.4}
+      },
+      "checkpoint_sha256": "d2e19fcb3248e0c3b2f62d8a52a34eee253bcf924f23dafe1c7b37273a907a46"
+    },
+    "B_food_noreplay": {
+      "batch_food_target": 4,
+      "replay_batches_per_update": 0,
+      "received_logic_ticks": 1005881,
+      "food_events": 1460,
+      "food_per_10000_received_ticks": 14.514639405655341,
+      "completed_episodes": 17848,
+      "strict_wins": 0,
+      "score_ge_1": 1376,
+      "score_ge_2": 80,
+      "highest_observed_score": 3,
+      "termination_counts": {
+        "wall_collision": 17802,
+        "self_collision": 24,
+        "obstacle_collision": 22
+      },
+      "batch_transitions": {"mean": 2061.2167832167834, "min": 2048, "max": 2333},
+      "batch_food": {"min": 4, "median": 10, "max": 20},
+      "final_validation": {
+        "deterministic": {"mean_score": 0.0, "max_score": 0, "wins": 0, "mean_ticks": 16.0},
+        "stochastic": {"mean_score": 0.06666666666666667, "max_score": 1, "wins": 0, "mean_ticks": 59.4}
+      },
+      "checkpoint_sha256": "85f16b4036cc07460d146df27837f5961600a644ee893d5b12b1605c8abbf71d"
+    },
+    "C_fixed_progress": {
+      "batch_food_target": 0,
+      "replay_batches_per_update": 1,
+      "received_logic_ticks": 1002749,
+      "food_events": 1474,
+      "food_per_10000_received_ticks": 14.699590824822563,
+      "completed_episodes": 18307,
+      "strict_wins": 0,
+      "score_ge_1": 1397,
+      "score_ge_2": 74,
+      "highest_observed_score": 3,
+      "termination_counts": {
+        "wall_collision": 18273,
+        "self_collision": 23,
+        "obstacle_collision": 11
+      },
+      "batch_transitions": {"mean": 2056.993006993007, "min": 2048, "max": 2093},
+      "batch_food": {"min": 3, "median": 10, "max": 19},
+      "replay_diagnostics": {
+        "mean_actor_policy_version_lag": 80.7227020747178,
+        "maximum_actor_policy_version_lag": 273,
+        "mean_behavior_target_joint_kl": 0.30537435015353337,
+        "mean_importance_ess_fraction": 0.5416104856070939,
+        "maximum_rho": 24.089269638061523
+      },
+      "final_validation": {
+        "deterministic": {"mean_score": 0.1, "max_score": 1, "wins": 0, "mean_ticks": 30.933333333333334},
+        "stochastic": {"mean_score": 0.06666666666666667, "max_score": 1, "wins": 0, "mean_ticks": 53.43333333333333}
+      },
+      "checkpoint_sha256": "e3f7612d346447ef4ee6233fb7b2fd70283a00a27235ee48540d3f11f615e753"
+    },
+    "D_food_progress": {
+      "batch_food_target": 4,
+      "replay_batches_per_update": 1,
+      "received_logic_ticks": 1006138,
+      "food_events": 1459,
+      "food_per_10000_received_ticks": 14.50099290554576,
+      "completed_episodes": 18228,
+      "strict_wins": 0,
+      "score_ge_1": 1400,
+      "score_ge_2": 58,
+      "highest_observed_score": 3,
+      "termination_counts": {
+        "wall_collision": 18200,
+        "self_collision": 16,
+        "obstacle_collision": 12
+      },
+      "batch_transitions": {"mean": 2062.5174825174827, "min": 2048, "max": 2734},
+      "batch_food": {"min": 4, "median": 10, "max": 20},
+      "replay_diagnostics": {
+        "mean_actor_policy_version_lag": 70.34062685666385,
+        "maximum_actor_policy_version_lag": 273,
+        "mean_behavior_target_joint_kl": 0.26366433148792134,
+        "mean_importance_ess_fraction": 0.6024032297667924,
+        "maximum_rho": 24.34019660949707
+      },
+      "final_validation": {
+        "deterministic": {"mean_score": 0.0, "max_score": 0, "wins": 0, "mean_ticks": 16.0},
+        "stochastic": {"mean_score": 0.06666666666666667, "max_score": 2, "wins": 0, "mean_ticks": 46.63333333333333}
+      },
+      "checkpoint_sha256": "b2cef9bd9545797546fbaebf17817483c56c1c56d72d220e8e13240cc67c5e61"
+    }
+  },
+  "combined_training_episodes": {
+    "count": 72047,
+    "wall_collision": 71893,
+    "wall_collision_rate": 0.997862512
+  },
+  "provenance": {
+    "aggregation": "Remote JSONL was streamed read-only from gpu_node and aggregated locally with jq.",
+    "old_source_file_sha256": "5cd424437f5378f900358cd5e5ed1acadf6dc12a272a4a1b2dca2e8a869ab2bc",
+    "old_source_path": "/data/lyy/resnake_gym/repo/src/resnake_gym/gamepad_vtrace.py",
+    "limitation": "The v1 logs do not contain exact receipt-axis food-event positions, so no exact 250k-tick trend bins are reported."
+  }
+}

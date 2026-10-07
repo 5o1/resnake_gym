@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8">
+<title>手柄接口设计记录 · 2026-10-06</title>
+<style>body{max-width:900px;margin:48px auto;padding:0 24px;font:16px/1.8 system-ui;color:#242424}table{border-collapse:collapse;width:100%}td,th{padding:10px;text-align:left;border-bottom:1px solid #ddd}code{background:#f3f3f3;padding:2px 5px}h2{margin-top:2em}</style>
+<h1>手柄接口设计记录</h1>
+<p>2026-10-06。本文记录接口和测试，不是能力验收报告。现有训练产物均为pre-v3历史权重；v3尚无学习效果报告，也尚未完成机器人联合训练。</p>
+<p>当前v3源码在GPU节点既有PyTorch 2.14.1+cu126环境通过266项全量回归，另有3条既有Gymnasium接口警告；这只验证代码路径，不是策略能力证据。</p>
+<h2>依据与选择</h2>
+<table><tr><th>问题</th><th>已有依据</th><th>本项目的选择与边界</th></tr>
+<tr><td>手柄状态</td><td><a href="https://learn.microsoft.com/en-us/windows/win32/api/xinput/ns-xinput-xinput_gamepad">XINPUT_GAMEPAD</a></td><td>保留14个按钮、4个摇杆轴、2个扳机轴。20维排列和归一化属于项目约定，不是官方深度学习标准。</td></tr>
+<tr><td>离散按钮的梯度</td><td><a href="https://arxiv.org/abs/1611.01144">Jang等，Gumbel-Softmax，§2.2</a></td><td>PPO采样使用Bernoulli与score-function梯度；面向可微下游的独立helper可使用ST Gumbel-Softmax，前向按钮为0/1、反向为有偏代理梯度。确定性接口使用硬阈值前向和sigmoid代理反向。这些都不称为真实硬件导数。</td></tr>
+<tr><td>混合动作</td><td><a href="https://arxiv.org/abs/2109.05490">HyAR</a></td><td>该工作提醒不能忽略离散与连续结构。这里没有复现其VAE或参数化动作算法；默认保留Bernoulli按钮和Gaussian轴潜变量两类分布，不采用自由隐码替代控件语义。可选ChunkNormal是另一个待消融配置。</td></tr>
+<tr><td>空间关系</td><td><a href="https://arxiv.org/abs/1806.01830">Relational Deep RL</a></td><td>借鉴局部卷积与关系注意力。蛇头局部窗口、局部及全局双读出是本项目候选，尚未证明优于全卷积基线。</td></tr>
+<tr><td>动作因果结构</td><td><a href="https://proceedings.neurips.cc/paper_files/paper/2021/hash/2ba8698b79439589fdd2b0f7218d8b07-Abstract.html">Factored Policy Gradients</a></td><td>该工作说明已知的动作—目标影响结构可用于控制score-function估计方差，也警告结构指定错误会引入偏差。本项目没有复现FPG；只在Snake确实读取的独立控件因子上计算PPO/SIL概率，并额外遮蔽非因果反馈路径。</td></tr>
+<tr><td>循环状态重建</td><td><a href="https://openreview.net/forum?id=r1lyTjAqYX">R2D2</a></td><td>借鉴存储循环状态和无梯度burn-in的思路。本项目仍是on-policy PPO，不采用R2D2的DQN目标、分布式actor或其replay算法。</td></tr>
+<tr><td>自主成功经验</td><td><a href="https://proceedings.mlr.press/v80/oh18b.html">Self-Imitation Learning</a>及<a href="https://github.com/junhyukoh/self-imitation-learning">作者代码</a></td><td>采用正优势自模仿损失；取食边界快照、成功分层、回合保护、循环序列实现和采样比例是本项目适配，不是人工示范。</td></tr>
+<tr><td>分层训练</td><td><a href="https://arxiv.org/abs/1805.08296">HIRO</a></td><td>低层变化会改变高层面对的动作效果。这里只记录这一风险，不把可微接口宣称为HIRO实现，也未选定完整联合优化方法。</td></tr>
+<tr><td>异步动作块</td><td><a href="https://arxiv.org/abs/2506.07339">Real-Time Execution of Action Chunking Flow Policies</a></td><td>参考执行中动作与新动作块的时间对齐问题。当前没有实现该论文的flow inpainting；旧v0延迟包装器不能用于v1。</td></tr>
+<tr><td>真实设备读取</td><td><a href="https://pyga.me/docs/ref/sdl2_controller.html">pygame-ce SDL controller</a></td><td>使用命名控件而非猜测裸轴序号；Y轴转换为向上为正。只有接口代码，尚无连接实体手柄的验证结果。</td></tr></table>
+<h2>执行约定</h2>
+<p>当前入口为<code>resnake_gym/ReSnake-v1</code>。只接受长度20的手柄报告，拒绝整数方向和<code>action_mode</code>。v0冻结保留，用于复现历史，不属于新版训练入口。</p>
+<p>按钮是按住状态，不是转向事件。十字键优先于左摇杆；相反方向互相抵消；斜向平局不产生方向请求；左摇杆在径向死区外按主轴选择方向。这些是公开的游戏绑定，不是行业统一规则。中立输入保持蛇的运动，反向请求仍按旧游戏规则忽略。其余控件保留报告，但没有游戏功能，不能称为双手协作任务已经成立。</p>
+<p>可微张量留在PyTorch计算图中。转换到NumPy和硬件报告只发生在执行边界。联合阶段必须由实际手柄状态驱动游戏，不能用期望状态替代。当前没有接通机器人或VLA。</p>
+<h2>模型边界</h2>
+<p>编码器保留全部格子，局部窗口以收到的画面中的蛇头为中心，不读取隐藏的当前蛇头。局部边界有显式on-board通道。不同尺寸分组形成batch，目前不支持混合尺寸padding。权重能接受不同尺寸，不等于策略已学会尺寸外推。</p>
+<p>外部观测仍携带完整实际手柄报告、按时间排序的反馈历史和上次提交的动作块。当前Snake策略在这三条反馈路径进入GRU以前，把游戏无法读取的控件置零，只保留十字键0—3和左摇杆轴14—15；观测年龄、事件时间间隔、新画面标记及提交时间照常进入。这个内部遮罩是Snake任务的因果假设，不改变公开20维接口。无效padding不会更新反馈记忆。目前反馈假设为决策时可获得的理想HID记录，真实设备反馈延迟尚未建模。</p>
+<p>策略仍生成并输出全部14个按钮和6个轴潜变量，形成完整<code>[B,L,20]</code>报告。默认按钮为Bernoulli、轴潜变量为Gaussian；设置<code>chunk_rho</code>时改用沿时间相关的连续潜变量，按钮再经sigmoid映射。Snake的score-function更新只对十字键四因子和左摇杆两因子的log probability与entropy求和；其余控件照常采样和输出，但不进入本任务的PPO/SIL比值。当前两种分布都按控件独立，<code>ChunkNormal</code>只沿chunk时间相关，因此这是六个因子的精确边缘概率。若以后加入跨控件相关分布、修改游戏绑定，或让未绑定控件经反馈影响下一步有效动作，这个结论必须重新证明。ST路径供可微下游使用，不是通过离散游戏奖励反传的替代品。</p>
+<p>独立Bernoulli方向键会产生相反键、斜向平局及D-pad遮蔽摇杆等冗余报告。候选<code>dpad5</code>动作头改为neutral/up/down/left/right的Categorical分布，再展开为完整20维报告；其精确PPO概率、ST下游接口、非规则作弊边界及raw/dpad5/stick5消融见<a href="structured-gamepad-action.md">结构化手柄动作设计</a>。当前尚无dpad5学习结果，31×20完整通关标准不变。</p>
+<h2>异步执行与强化学习适配</h2>
+<p><code>AsyncGamepad</code>将画面采集、画面到达、动作块提交、动作块到达、游戏逻辑帧分别处理。观测不是事后从真实历史中随便挑一帧：每个画面都有采集与到达时刻，可以丢失或乱序；旧画面不覆盖新画面。动作j绑定提交时刻+j，迟到前缀丢弃，不顺延。时间窗口没有可用动作时发送中立报告，这是一条公开的通信降级规则，不查询游戏状态。</p>
+<p>训练默认31×20、10逻辑帧/秒；每次决策间隔随机2—5帧，输出8帧手柄报告；画面延迟0—3帧，动作延迟0—2帧，画面丢失概率0.1。这些是可配置的工程测试值，不是测量得到的机器人延迟。时间由事件仿真推进，尚不是独立墙钟线程驱动的实时验证。</p>
+<p>训练器采用<a href="https://arxiv.org/abs/1707.06347">PPO</a>的裁剪目标和<a href="https://arxiv.org/abs/1506.02438">GAE</a>。
+循环更新参考<a href="https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/ppo_atari_lstm.py">CleanRL的循环PPO实现</a>，保留轨迹时间顺序并在episode边界重置记忆。本项目用GRU和混合手柄动作替换其LSTM与离散Atari动作，未使用其Atari图像预处理、奖励裁剪或动作重复。</p>
+<p>每次决策奖励为期间各逻辑帧奖励按gamma加权之和，bootstrap折扣为gamma的实际帧数次方；lambda按决策步定义。死亡不bootstrap，时间截断用截断前的已送达观测bootstrap，但GAE不跨越重置。GAE在本次采样批次内按完整时间顺序计算；它不会跨越批次边界。</p>
+<p>长采样批次不再等于一次长反向传播。PPO保存每个样本采集前的GRU状态，按环境和episode切成窗口；默认从最多64步前的存储状态开始，无梯度重放burn-in，再对不超过128步的learn区间反传。每个采样恰好进入一个learn区间，窗口不跨重置，整轮损失按总样本数归一化后更新。更新后仍重算本段轨迹末端记忆。这是借鉴R2D2状态重建思想的PPO项目适配，不是R2D2算法，也不是完整episode BPTT。</p>
+<p>PPO概率比计算于Snake因果边缘动作空间；固定轴变换的Jacobian在新旧比值中抵消。熵项采用这六个潜动作因子的熵，不是实际20维手柄报告的熵。完整20维张量仍送到执行器和可微下游。默认并行动作头使chunk内各时间位置条件独立，是当前基线的限制，不是已经验证的最佳chunk解码方式。</p>
+<h2>流程检查记录（pre-v3历史）</h2>
+<p>GPU节点使用既有PyTorch 2.14.1+cu126，没有下载新权重。最终完整回归149项通过；本地无PyTorch，两组模型测试跳过，其余137项通过。测试包括重设逻辑帧率后的时间单位检查。三个警告分别是历史v0弃用提示、对包装器运行Gym检查的提示、以及观测年龄允许无上界的提示，无测试失败。</p>
+<p>三轮PPO流程检查使用31×20棋盘、4个环境、16个决策步/rollout、32维网络：共192次决策、666个逻辑帧。梯度与损失有限，检查点可保存和重新加载。同一份权重在31×20、20×31、40×25各3个留出seed上均未通关，平均得分0。该结果不证明游戏能力，也不证明闭环决策能力。</p>
+<p>源码检查目录在GPU节点<code>/data/lyy/resnake_gym/async-v1-check-J3yi2k</code>；对应训练和评估产物在<code>/data/lyy/resnake_gym/artifacts/gamepad-v1-smoke-GgV1He</code>。这些路径不是本地文件。后续训练入口会保存源码SHA-256清单；本次检查版本保留在独立源码目录中。</p>
+<p>最后的回归测试源码快照在GPU节点<code>/data/lyy/resnake_gym/async-v1-final-K1H929</code>。它比上述短训练版本多了逻辑帧率重设修正和源码哈希记录。</p>
+<h2>v2模型接入（pre-v3历史；上述流程记录为v1）</h2>
+<p>新训练使用31×20的PerturbedGamepadEnv，14通道输入。蛇头7×7局部分支保留，全局卷积分支在卷积层之间清除padding，注意力也排除padding。相同有效棋盘放入不同大小画布的输出一致性已测试；这只证明padding处理正确，不证明跨棋盘尺寸的游戏能力。</p>
+<p>观测记忆使用GRU，新增画面年龄、决策间隔、周期、快照年龄、实际报告年龄和每个动作槽的目标时间。时间输入具体契约见<a href="gamepad-api.html">API第7节</a>。默认仍是并行动作头；可选GRU解码头共享逐槽状态，但采样仍条件独立，不能称为随机动作的自回归模型。</p>
+<p>方法依据是<a href="https://proceedings.mlr.press/v162/ni22a.html">Ni等的循环POMDP基线</a>、<a href="https://github.com/twni2016/pomdp-baselines">作者实现</a>、<a href="https://arxiv.org/abs/1707.06347">PPO</a>、<a href="https://arxiv.org/abs/1506.02438">GAE</a>。采用的是循环记忆、概率比更新与优势估计；本文的局部/全局编码、手柄分布、动作块与时间字段是项目适配，不是原论文已经验证的组合。循环解码器仅作为候选，不能凭结构判断优于并行头。</p>
+<p>当时PPO按时间顺序回放循环状态，并对整个chunk的全部20维求和。该做法已由v3的Snake因果边缘目标和内部反馈遮罩替代；这里仅保留旧实验解释，不能用来描述当前训练目标。</p>
+<p>本次GPU全量回归216项通过。PyTorch仍为节点已有的2.14.1+cu126，没有下载依赖。20次纯RL更新累计8,650游戏tick、2,560次决策；三个棋盘尺寸各5局独立测试均0分。同一模型的闭环／冻结反馈／回放矩阵也没有分数优势，且没有实际扰动生效，验收为insufficient。不能从这轮短跑得出策略会看画面或应对扰动的结论。</p>
+<p>独立实时进程样本运行16tick后结束，约9.995Hz，时间审计通过；首次推理约808ms。它只验证游戏不会等待模型及动作包时间链路，不是实时控制合格记录。快照/HID年龄在事件仿真中仍为0，同步与异步障碍候选分布也不同；这些训练—部署差异没有被新增字段自动解决。</p>
+<p>源码与产物在GPU节点<code>/data/lyy/resnake_gym/model-v2-JDXE6Aez</code>，训练记录的source_sha256可核对版本；权重未复制回本地。</p>
+<h2>事件采样与奖励修订</h2>
+<p>训练CLI默认<code>collection-mode=events</code>：每环境至少128次决策；达到最低长度后，只有全体环境累计4次取食才能提前停止，并在完成当前并行环境轮次后更新。死亡和时间上限截断都只记审计指标，不能满足成功配额。每环境512次决策是硬上限；到上限仍不足4次取食时照常更新，并记录<code>collection_food_target_met=false</code>、<code>collection_food_shortfall</code>及<code>collection_stop=hard_limit</code>。<code>PPOConfig</code>程序接口仍默认fixed，训练CLI才默认events；两者不得混写。</p>
+<p>一批采样固定同一版策略。取食、终止、时间上限及批次边界记录为fragments，含环境编号、局编号、游戏tick区间和策略版本。片段只是PPO审计边界；取食不标为done，不清空GRU，也不截断GAE。PPO继续使用整批中的失败、普通移动和未完成片段，不能为了“成功批次”删除它们。SIL另在未终止回合的取食决策处深拷贝从本局开头到该决策的pending前缀，用该决策后的value作bootstrap；每个环境最多保留最新一份，后续取食原子替换旧快照。因而取食成功可在本次采样后的SIL阶段立即复用，而不必等整局结束。</p>
+<p>这是项目采样停止规则，不是<a href="https://arxiv.org/abs/1707.06347">标准PPO</a>的一部分。事件依赖的停止仍可能改变有限批次的样本组成，应保留fixed模式作相同环境交互预算、多种子对照。增加采样长度不等于增加单局存活长度，也不让GAE越过批次边界；food quota只提高每批看见成功事件的机会，不保证策略已经学会取食。</p>
+<p>新奖励food-efficiency-pbrs-v1：食物生成时冻结可用格数N、未占据格数F、上一食物到当前食物的曼哈顿距离D；T为实际取食tick间隔。吃到奖励为1+0.5(1-F/N)+0.5D/max(D,T)，死亡−3，胜利额外+3，普通移动和训练截断基础奖励0。第一颗以初始蛇头为起点；整体旋转不改变冻结距离。取食奖励不因中途新增障碍变大。</p>
+<p>附加势函数为Φ=0.25[1−曼哈顿距离/(W+H−2)]，每tick加γΦ(next)−Φ(current)。真正终态Φ=0，普通截断保留Φ与bootstrap；换食物时不裁掉势差。形式依据<a href="https://ai.stanford.edu/~ang/papers/shaping-icml99.pdf">Ng等的PBRS</a>，系数为项目待验证设定。shaping-scale=0可关闭塑形作对照，不改变取食基础奖励。</p>
+<p>默认仍为γ=0.99/tick、λ=0.95/决策；CLI开放gamma与gae-lambda。这意味着GAE的远期衰减问题仍待单独对照，不声称长采样已经解决长远规划。当前PPO的优势覆盖本批次完整序列，梯度则采用64步burn-in和最长128步learn窗口；两者不能混称为“完整BPTT”。</p>
+<p>旧事件采样试验（pre-v3）曾让死亡计入配额：两次更新在128次决策/环境后触发，各含3和1次取食、36和40次真正终止，总计3469游戏tick。该停止语义已废弃，结果不能验证当前food-only quota。历史目录为GPU节点<code>/data/lyy/resnake_gym/events-AWmDCwz3</code>。</p>
+<h2>自主经验回放与持续训练</h2>
+<p>新增SequenceReplay和可选PPO+SIL，依据<a href="https://proceedings.mlr.press/v80/oh18b/oh18b.pdf">Oh等，ICML 2018</a>及<a href="https://github.com/junhyukoh/self-imitation-learning">作者实现</a>。回合结束后计算变时长折扣回报；更新使用max(R−V,0)，策略项−logπ·stop_gradient(max(R−V,0))，价值项为正残差平方。只使用自主探索数据，没有外部示范、BC预训练或规则教师。</p>
+<p>完成回合只要出现过取食、正分或严格通关，就标为自主成功；活动取食快照及恢复后保留的成功fragment也属于成功层。这一定义不把规则规划器或人工数据引入训练。主池容纳完成episode和恢复后fragment；超过容量时先淘汰最早失败，失败不能挤掉成功，如果池中全是成功才淘汰最早成功。每环境至多一份正在运行的活动快照不占主池容量，因此可采样序列总数最多为容量加环境数。</p>
+<p>当成功序列和失败回合两层都非空时，采样先给成功层默认0.5概率，余下给失败层；成功层包含完成成功episode、活动取食快照和resume后保留的成功fragment。每层内部以转移数为目标质量，并以10%长度质量和90%“长度×优先级<sup>α</sup>”质量混合抽样，再作层内importance correction。只有一层非空时全部质量退回该层。这个成功比例不会被校正回全局均匀转移分布；<code>α=0</code>只消除层内优先级影响，并不取消成功分层。成功保护、0.5比例、快照和层内校正都是项目适配，尚无证据表明它们优于未分层SIL。</p>
+<p>SIL的GRU仍从被抽中序列的起点按当前权重前向重建，每128次决策detach一次并继续前向；不同长度序列的填充项不计损失。它尚未采用PPO的存储状态+burn-in窗口，因此长episode或长取食前缀仍是O(序列长度)的计算路径。普通PPO只使用最新on-policy批次，SIL不把旧样本塞进PPO概率比。CLI开放回放容量、批量大小、α和成功比例。</p>
+<p>完整episode与活动成功快照都含实际观测、采样按钮与轴潜变量、行为log probability、策略版本、逐tick奖励、执行tick及实际反馈。活动快照的尾部回报用取食决策后的value bootstrap；时间上限完整回合也使用采集时bootstrap。这些是估计目标，不冒充完整Monte Carlo回报。完成episode以递增文件长期归档；活动快照以每环境固定文件原子替换，后续取食覆盖旧前缀，episode结束后删除快照并由完整episode接替。</p>
+<p>训练支持--resume和定期保存模型、优化器、完整回放池及活动成功快照。续训仍会重开活动游戏，不是逐bit恢复；普通pending前缀、环境状态和随机数流不恢复。已保存成功快照在恢复时提升为受保护的独立success fragment，不再绑定原环境槽位，不会与新游戏的pending拼接，也不会被新回合结束删除；它与完成episode共用主池容量。v3 checkpoint同时标记训练目标、采样停止、循环更新和<code>success-snapshot-sil-v2</code>回放目标，拒绝把旧权重静默加载到新语义下。轻量评估策略不携带回放数据。</p>
+<p>run01—run04均为pre-v3历史实验。run04从run02第60轮检查点续训，采用旧的全20维PPO概率、死亡可满足事件配额、旧循环更新和未分层回放。第20轮验证中，确定性策略30局平均0.10个食物，采样策略30局平均0.067个食物，两者均零通关。这不是有效学习证据，也不能外推到v3。验证种子610000起已用于调参诊断，不作为最终未见测试集。</p>
+<p>GPU路径为/data/lyy/resnake_gym/replay-Ik3zvWAy/run04。watch_learning.py每20轮对保存快照运行上述两组验证，结果留在节点；进程退出也会记录。发现通关只标为待审计候选，不自动宣告项目完成。新增汇总工具summarize_learning.py区分训练局统计与独立验证。</p>
+<h2>尚未完成</h2>
+<ul><li>在31×20目标棋盘上完成v3多种子训练，并与fixed collection、全20维旧目标、无SIL和未分层SIL作等交互预算对照；当前只有实现与测试，没有学习效果。</li><li>量化food quota的批次组成偏差、活动快照bootstrap误差、成功分层的有效样本量，以及SIL长序列扫描的时间和显存成本；必要时再把SIL改为有状态窗口。</li><li>训练时间分布与实测推理、IPC、HID延迟的校准。现在有字段、有实时执行器，尚无鲁棒性结果。</li><li>有效扰动下的反馈优势、恢复能力与尺寸泛化；不能用pre-v3的0分短跑或单元测试代替。</li><li>具体VLA适配、联合目标和真实手柄端到端试验。</li></ul>
+<p>障碍验证与异步生成已另见<a href="solvability.html">可解性说明</a>。不沿用旧4×4或BC成绩作为新版成果。</p>
+</html>

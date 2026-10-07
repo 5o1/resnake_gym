@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="ReSnake project">
+<meta name="description" content="ReSnake 虚拟手柄强化学习的失败复盘、V-trace 方法审计与暂停交接">
+<title>ReSnake 方法审计：旧 V-trace 为什么没有学会</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg:#f5f5f3; --paper:#fff; --panel:#fcfcfb; --border:#deddd8;
+  --text:#111; --text2:#50504c; --muted:#74736d; --blue:#246fbd;
+  --orange:#d85c2b; --green:#14815c; --red:#aa2921; --yellow:#9a6a00;
+  --note:#eef4fa; --warn:#fff4df; --badbg:#fcecea; --goodbg:#eaf6f0;
+}
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; background:var(--bg); }
+body { margin:0; color:var(--text); background:var(--bg);
+  font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+main { max-width:1000px; margin:0 auto; padding:32px 18px 72px; }
+h1 { font-size:27px; line-height:1.35; margin:0 0 5px; letter-spacing:-.01em; }
+h2 { font-size:20px; margin:42px 0 10px; padding-top:10px; border-top:1px solid var(--border); }
+h3 { font-size:17px; margin:28px 0 7px; }
+p { margin:8px 0; }
+ul,ol { padding-left:22px; }
+li { margin:4px 0; }
+a { color:var(--blue); }
+.sub { color:var(--text2); margin:0 0 20px; }
+.box { background:var(--panel); border:1px solid var(--border); border-radius:3px; padding:13px 15px; margin:13px 0; }
+.note,.warn,.bad,.good { border-left:4px solid var(--blue); padding:10px 14px; margin:13px 0; }
+.note { background:var(--note); }
+.warn { background:var(--warn); border-color:var(--yellow); }
+.bad { background:var(--badbg); border-color:var(--red); }
+.good { background:var(--goodbg); border-color:var(--green); }
+.toc { columns:2; font-size:14px; }
+.toc a { display:inline-block; margin:2px 0; text-decoration:none; }
+.status-grid,.metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--border); border:1px solid var(--border); margin:14px 0; }
+.status-grid > div,.metric-grid > div { background:var(--paper); padding:12px 13px; }
+.metric { font-size:23px; line-height:1.2; font-weight:650; color:var(--blue); }
+.metric small { display:block; margin-top:5px; color:var(--text2); font-size:12px; line-height:1.45; font-weight:400; }
+.label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
+.state { font-weight:650; }
+.state.done { color:var(--green); }
+.state.partial { color:var(--yellow); }
+.state.none { color:var(--red); }
+.scroll { overflow-x:auto; }
+table { border-collapse:collapse; width:100%; margin:8px 0; font-size:13px; }
+th,td { border-bottom:1px solid var(--border); padding:7px 8px; text-align:left; vertical-align:top; }
+th { color:var(--text2); font-weight:650; background:#f8f8f6; }
+td.num,th.num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+code { padding:1px 4px; border-radius:2px; background:#edf1f5; font-size:13px; }
+pre { margin:10px 0; padding:11px 13px; overflow:auto; border:1px solid var(--border); border-radius:2px;
+  background:#f2f4f6; font:12.5px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.formula { padding:10px 12px; margin:10px 0; border:1px solid var(--border); background:#fafafa;
+  overflow:auto; font:15px/1.6 Georgia,"Times New Roman","Songti SC",serif; }
+.caption,.small { color:var(--text2); font-size:12.5px; }
+.flow { margin:14px 0; border:1px solid var(--border); background:var(--paper); overflow-x:auto; }
+.flow svg { display:block; width:100%; min-width:760px; height:auto; }
+.flow text { font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; fill:var(--text); }
+.flow .minor { fill:var(--text2); font-size:12px; }
+.barrow { display:grid; grid-template-columns:54px minmax(160px,1fr) 74px; gap:9px; align-items:center; margin:6px 0; font-size:13px; }
+.bartrack { height:14px; background:#e9e8e3; overflow:hidden; }
+.bar { display:block; height:100%; background:var(--blue); }
+.bar.zero { min-width:1px; background:var(--orange); }
+.split { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.callout-title { margin:0 0 4px; font-weight:650; }
+.nowrap { white-space:nowrap; }
+.ref { font-size:13.5px; }
+.ref li { margin:7px 0; }
+.ref { list-style:none; padding-left:0; }
+.path { overflow-wrap:anywhere; }
+@media (max-width:760px) {
+  .toc { columns:1; }
+  .status-grid,.metric-grid { grid-template-columns:1fr 1fr; }
+  .split { grid-template-columns:1fr; }
+}
+@media (max-width:480px) {
+  main { padding:22px 12px 48px; }
+  .status-grid,.metric-grid { grid-template-columns:1fr; }
+}
+@media print {
+  body,html { background:#fff; }
+  main { max-width:none; padding:10mm 12mm; }
+  .box,.note,.warn,.bad,.good,table,pre,.flow { break-inside:avoid; }
+  h2,h3 { break-after:avoid; }
+  a { color:inherit; text-decoration:none; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>ReSnake 方法审计：旧 V-trace 为什么没有学会</h1>
+<p class="sub">2026-10-07 · 完整 31×20 棋盘 · 虚拟手柄强化学习 · 暂停交接报告</p>
+
+<div class="warn">
+<p class="callout-title">报告时点</p>
+<p>实现与训练已经暂停。GPU 节点没有正在运行的 ReSnake 训练；旧 v2-D 预览服务也已停止，页面与历史工件没有删除。旧四臂正式实验已经完成，但使用的是 <code>gamepad-vtrace-v1</code>。后来完成的事件语义修订和当前 v3 长信用代码都没有对应的正式训练结果。</p>
+</div>
+
+<div class="box toc">
+<a href="#abstract">摘要</a><br>
+<a href="#scope">1. 研究问题与边界</a><br>
+<a href="#task">2. 环境、输入、动作和奖励</a><br>
+<a href="#model">3. 模型怎样读取状态</a><br>
+<a href="#v1">4. 旧 v1 四臂实验</a><br>
+<a href="#diagnosis">5. 方法审计</a><br>
+<a href="#v3">6. v2/v3 修订</a><br>
+<a href="#pause">7. 暂停断点</a><br>
+<a href="#protocol">8. 下一轮预登记</a><br>
+<a href="#reproduce">9. 复现与恢复</a><br>
+<a href="#robot">10. 与机器人阶段的关系</a><br>
+<a href="#limits">11. 限制与结论</a><br>
+<a href="#artifacts">附录：工件</a><br>
+<a href="#references">参考文献</a>
+</div>
+
+<h2 id="abstract">摘要</h2>
+<div class="note">
+<p>旧方法没有学会完整 31×20 贪吃蛇。四个条件分别比较固定采集或取食配额、关闭或开启进度回放；每组接收约 100 万游戏 tick（一次 tick 让蛇移动一格），训练期间均未通关，取食率都落在 14.50–14.70 次/万 tick。最后的 30 局确定性评测中，四组仍全部撞墙。A、B、D 三组每局都在第 16 tick 撞墙；C 组能多走一段，3/30 吃到一个食物，仍没有一局通关。</p>
+<p>本文不把失败简单归结为“迭代次数不够”。旧实现同时存在三个更靠前的问题：长度 8 的动作块中有大量随机变量没有形成当次执行动作；V-trace 回报在最长 128 次决策的传输片段处截断；以分数分层的旧回放会把“本片段没有新取食、只是此前已经得分”的样本当成正样本。取食配额的批下限又设为 2048，普通批次中位数已经包含 10 次取食，因此配额大多没有改变停止位置。</p>
+<p>V-trace 是异步强化学习中的回报校正算法：并行游戏进程（actor）采集经验，更新网络的进程（learner）用采集策略与当前策略的概率比率修正滞后数据。当前工作树已经把传输片段、信用序列和循环网络反向窗口拆开，并加入单动作保持头 H1 作为诊断。代码在本地 CPU 环境通过 382 项测试，但静态检查尚未通过；动作因果审计还没有接入训练日志，文档与代码的序列拼接器版本号也不一致。正式 v3 六组实验尚未启动。</p>
+</div>
+
+<div class="metric-grid">
+  <div><div class="metric">4 × ≈1M<small>旧 v1 四组各约一百万接收 tick</small></div></div>
+  <div><div class="metric">0<small>72,047 个训练终局中的严格通关数</small></div></div>
+  <div><div class="metric">99.786%<small>旧训练终局的撞墙比例：71,893 / 72,047</small></div></div>
+  <div><div class="metric">382 / 382<small>暂停工作树本地测试；Ruff 仍未通过</small></div></div>
+</div>
+
+<h2 id="scope">1. 研究问题与边界</h2>
+<div class="box">
+<p>本研究的完整课题要把三段系统接起来：游戏策略输出目标手柄状态；双 ROKAE AR5-5/0.8R 与 LinkerHand G20 把目标落实到实体 Xbox 手柄；游戏读取真实手柄反馈。当前阶段只研究第一段，而且保留后两段需要的时间与手柄接口。</p>
+<pre>游戏场景 + 已执行手柄历史 + 时间信息
+                 │
+                 ▼
+        强化学习策略（当前阶段）
+                 │  [L,20] 目标手柄报告 + 时间戳
+                 ▼
+        异步虚拟执行器（当前可运行）
+                 │
+                 ├── 游戏状态、奖励、真实执行报告
+                 │
+                 └── 实体手柄 + 双臂灵巧手（尚未接入）</pre>
+<p>本研究把“学会”定义为：冻结策略在完整 31×20 棋盘上把蛇填满。吃到一个或几个食物、延长存活时间、小棋盘通关和接口测试都不算完成目标。</p>
+</div>
+
+<div class="status-grid">
+  <div><div class="label">环境与虚拟手柄</div><div class="state done">已实现</div><div class="small">含扰动、延迟、丢帧和逐 tick 执行记录</div></div>
+  <div><div class="label">旧版正式实验</div><div class="state done">已完成</div><div class="small">结果是不合格，并保留原始工件</div></div>
+  <div><div class="label">v3 方法实现</div><div class="state partial">代码级原型</div><div class="small">测试通过，质量门和接线未收尾</div></div>
+  <div><div class="label">机器人与真实手柄反馈</div><div class="state none">尚未开始</div><div class="small">没有 USB HID 真机闭环数据</div></div>
+</div>
+
+<h2 id="task">2. 环境、输入、动作和奖励</h2>
+<h3>2.1 一次决策不等于一帧</h3>
+<p>环境遵循 Gymnasium 的 <code>reset()</code>/<code>step()</code> 接口，并分别返回任务终止与外部截断信号 [1]。游戏按逻辑 tick 推进，一次 tick 让蛇移动一格。策略每次决策后，环境随机推进 2–5 个 tick；观测可延迟 0–3 tick，命令可延迟 0–2 tick，画面丢失概率为 0.1。动作块含 8 个未来报告。报告过期时不向后平移，新的命令可以覆盖同一目标 tick 的旧命令，没有可执行报告时使用中立手柄状态。</p>
+<p class="small">Gymnasium 只提供环境接口约定。贪吃蛇规则、扰动、异步手柄队列、状态编码、奖励和 V-trace 训练代码均由本研究实现。</p>
+
+<div class="flow" aria-label="异步手柄时序示意图">
+<svg viewBox="0 0 940 250" role="img">
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64645f"/></marker></defs>
+  <rect x="22" y="35" width="180" height="64" fill="#eef4fa" stroke="#c9d9e8"/><text x="112" y="60" text-anchor="middle" font-size="14" font-weight="600">延迟后的观测</text><text x="112" y="82" text-anchor="middle" class="minor">scene + report + history + time</text>
+  <line x1="202" y1="67" x2="260" y2="67" stroke="#64645f" marker-end="url(#arrow)"/>
+  <rect x="264" y="35" width="174" height="64" fill="#fff" stroke="#deddd8"/><text x="351" y="60" text-anchor="middle" font-size="14" font-weight="600">循环策略</text><text x="351" y="82" text-anchor="middle" class="minor">一次产生 8 个报告槽</text>
+  <line x1="438" y1="67" x2="496" y2="67" stroke="#64645f" marker-end="url(#arrow)"/>
+  <rect x="500" y="35" width="178" height="64" fill="#fff4df" stroke="#e7ce98"/><text x="589" y="60" text-anchor="middle" font-size="14" font-weight="600">命令队列</text><text x="589" y="82" text-anchor="middle" class="minor">延迟、覆盖、过期</text>
+  <line x1="678" y1="67" x2="736" y2="67" stroke="#64645f" marker-end="url(#arrow)"/>
+  <rect x="740" y="35" width="176" height="64" fill="#eaf6f0" stroke="#b9dbc9"/><text x="828" y="60" text-anchor="middle" font-size="14" font-weight="600">逐 tick 执行</text><text x="828" y="82" text-anchor="middle" class="minor">记录来源、槽号与报告</text>
+  <line x1="828" y1="99" x2="828" y2="152" stroke="#64645f" marker-end="url(#arrow)"/>
+  <rect x="628" y="158" width="288" height="60" fill="#fcecea" stroke="#e2b9b5"/><text x="772" y="183" text-anchor="middle" font-size="14" font-weight="600">游戏转移与奖励</text><text x="772" y="204" text-anchor="middle" class="minor">同一决策聚合 K 个 tick 的回报</text>
+  <line x1="628" y1="188" x2="222" y2="188" stroke="#64645f" marker-end="url(#arrow)"/>
+  <rect x="22" y="158" width="196" height="60" fill="#fff" stroke="#deddd8"/><text x="120" y="183" text-anchor="middle" font-size="14" font-weight="600">训练记录</text><text x="120" y="204" text-anchor="middle" class="minor">请求、执行、时间戳、奖励</text>
+</svg>
+</div>
+
+<h3>2.2 状态张量</h3>
+<p>扰动环境使用 <code>scene-grid-v2</code>。默认 31×20 棋盘放入 31×31 画布，得到 <code>float32[14,31,31]</code>。通道 0–8 表示蛇、身体顺序、头尾、食物和朝向；通道 9 是已生效障碍，10 是有效棋盘掩码，11 是已预告障碍，12–13 保留旋转预告。当前实验关闭随机旋转，因此 12–13 在常规训练中为零。</p>
+<p>本研究让策略同时接收当前已执行的 20 维手柄报告、上次决策以来按时间排序的执行历史、上一动作块、画面年龄、决策间隔和 8 个目标执行时刻。这样换棋盘大小不需要更换固定长度的全连接输入，也能让策略区分“刚看到的画面”和“已经过期的画面”。</p>
+
+<h3>2.3 动作是完整手柄报告</h3>
+<div class="scroll"><table>
+<thead><tr><th>索引</th><th>控件</th><th>范围</th><th>当前 Snake 是否读取</th></tr></thead>
+<tbody>
+<tr><td>0–3</td><td>D-pad 上、下、左、右</td><td>[0,1]，执行时 ≥0.5 视为按住</td><td>是</td></tr>
+<tr><td>4–13</td><td>Start、Back、摇杆按键、肩键、ABXY</td><td>[0,1]</td><td>否，但公共接口保留</td></tr>
+<tr><td>14–17</td><td>LX、LY、RX、RY</td><td>[-1,1]</td><td>只读取 LX、LY</td></tr>
+<tr><td>18–19</td><td>LT、RT</td><td>[0,1]</td><td>否</td></tr>
+</tbody></table></div>
+<p>微软的 <code>XINPUT_GAMEPAD</code> 结构定义了按钮位、两个扳机和四个摇杆轴 [10]；本研究据此排列控件，再把数值归一化为 20 维浮点张量。它是本研究定义的、带版本号的 XInput 风格接口，不是微软发布的“深度学习标准”。环境始终接收完整 <code>[L,20]</code>；策略内部可以使用较窄的随机变量，再通过固定模板展开。模板只规定手柄语义，不读取蛇头、食物、墙或障碍，也不替策略选择安全方向。</p>
+<p class="small">本研究的摇杆坐标采用屏幕方向：X 正值向右，Y 正值向上，0 为回中。按钮维度表示持续按住状态，不表示相对蛇头的左转或右转。</p>
+
+<h3>2.4 奖励</h3>
+<p>生成一个新食物时，记录上一个食物位置（此时也是蛇头）到新食物的曼哈顿距离 <i>D</i>、当时可用格数 <i>N</i> 和蛇长 <i>l</i>。吃到该食物用了 <i>T</i> 个 tick 时，基础取食奖励为：</p>
+<div class="formula">r<sub>food</sub> = 1 + 0.5 · (l / N) + 0.5 · D / max(D, T, 1)</div>
+<p>其中 <i>D / max(D,T,1)</i> 在沿最短距离到达时取 1，绕路时下降；<i>l/N</i> 让后期高占用状态的食物略重。碰撞默认再加 −3，填满棋盘再加 +3。每个 tick 另加入势函数差：</p>
+<div class="formula">F(s,s′) = γ Φ(s′) − Φ(s)，　Φ(s)=α·(1 − d(s)/(W+H−2))</div>
+<p><i>d(s)</i> 是当前蛇头到食物的曼哈顿距离，默认 <i>α</i>=0.25。这个形式依据势函数奖励塑形的策略不变条件 [5]；具体系数、密度项和效率项由本研究设定，尚无消融证明它们最合适。</p>
+
+<h2 id="model">3. 模型怎样读取状态</h2>
+<div class="box">
+<ol>
+<li><b>蛇头局部：</b>以蛇头为中心裁出 7×7 区域，卷积后压成 64 维。边界外填充与棋盘空地用额外掩码区分。</li>
+<li><b>全局棋盘：</b>全卷积生成每个格子的特征向量，并用相对蛇头的对数坐标编码位置。模型分别做一次偏向近邻的读取和一次不限距离的读取。</li>
+<li><b>实体汇总：</b>当前配置启用对所有有效格共享的小网络，再做对称最大池化。它能处理不同棋盘尺寸，没有固定的格子数参数。</li>
+<li><b>执行历史：</b>另一个循环单元按时间读入实际执行的手柄报告。场景特征、反馈历史、上一动作块和时间特征共同进入 64 维门控循环单元（GRU）的记忆状态。</li>
+<li><b>策略和值：</b>策略头输出动作分布，价值头估计当前状态价值。旧正式实验使用 J8：8 个槽分别从不操作、上、下、左、右五个方向中采样一次。</li>
+</ol>
+</div>
+<p>本研究的编码明确偏向蛇头邻域，同时保留远处食物、障碍和身体结构。它解决了“换棋盘尺寸就必须重训固定输入层”的结构问题，但不等于已经验证跨尺寸泛化。</p>
+<p>本研究在训练时共同更新局部/全局场景编码器、执行历史循环单元、融合 GRU、策略头和价值头；环境、奖励计算、20 维手柄字段顺序和五方向到完整报告的模板固定不训练。旧 v1 的训练数据全部来自强化学习采样；当前 v3 协议也只允许这种数据来源，不引入人类示范、行为克隆、规则教师或替策略纠错的控制器。</p>
+
+<h2 id="v1">4. 旧 v1 四臂实验</h2>
+<h3>4.1 实验设置</h3>
+<p>本研究为四组设置相同的训练随机种子 2026、31×20 环境和 J8 动作头。8 个并行采集进程各运行 2 个环境；折扣按实际经过的 tick 使用 <code>γ<sup>K</sup></code>，其中 γ=0.9999。</p>
+<p>网络宽度为 64，Adam 学习率为 10<sup>−4</sup>。总损失由策略项、系数 0.5 的价值项和系数 0.001 的熵项组成，梯度范数截到 0.5；V-trace 的三个重要性比率上限均为 1。</p>
+<p>本研究给每组设置约 100 万首次接收、未经过回放的 tick 预算，四组均完成 143 次采集更新。下表的一个 transition 指一次策略决策及随后 2–5 个游戏 tick 的合并结果；回放更新指从已保存的历史片段再训练一次。</p>
+<p>本研究的所有训练样本都由当时的随机策略在线产生。B/D 只改变“何时结束本批采集”，C/D 只增加从旧片段再训练的更新；四组都没有按人工成功轨迹筛选数据。</p>
+<div class="scroll"><table>
+<thead><tr><th>组</th><th>采集停止条件</th><th>每个新数据批次后的历史回放</th><th>问题</th></tr></thead>
+<tbody>
+<tr><td>A</td><td>至少 2048 transition</td><td>0</td><td>基础对照</td></tr>
+<tr><td>B</td><td>至少 2048 transition 且累计 4 次取食</td><td>0</td><td>取食配额是否改变数据组成</td></tr>
+<tr><td>C</td><td>至少 2048 transition</td><td>1 个 progress replay 更新</td><td>旧回放是否有益</td></tr>
+<tr><td>D</td><td>至少 2048 transition 且累计 4 次取食</td><td>1 个 progress replay 更新</td><td>两项同时打开</td></tr>
+</tbody></table></div>
+<p class="small">四臂工件自身标记为 <code>gamepad-vtrace-v1 / fifo-food-quota-v1</code>。它们不能写成后续 v2 事件修复或 v3 长信用方法的成绩。</p>
+
+<h3>4.2 训练流量结果</h3>
+<div class="scroll"><table>
+<thead><tr><th>组</th><th class="num">接收 tick</th><th class="num">取食</th><th class="num">每万 tick 取食</th><th class="num">终局数</th><th class="num">P(score≥1)</th><th class="num">P(score≥2)</th><th class="num">最高分</th><th class="num">通关</th></tr></thead>
+<tbody>
+<tr><td>A fixed / no replay</td><td class="num">1,005,710</td><td class="num">1,460</td><td class="num">14.517</td><td class="num">17,664</td><td class="num">7.801%</td><td class="num">0.459%</td><td class="num">3</td><td class="num">0</td></tr>
+<tr><td>B food / no replay</td><td class="num">1,005,881</td><td class="num">1,460</td><td class="num">14.515</td><td class="num">17,848</td><td class="num">7.710%</td><td class="num">0.448%</td><td class="num">3</td><td class="num">0</td></tr>
+<tr><td>C fixed / replay</td><td class="num">1,002,749</td><td class="num">1,474</td><td class="num">14.700</td><td class="num">18,307</td><td class="num">7.631%</td><td class="num">0.404%</td><td class="num">3</td><td class="num">0</td></tr>
+<tr><td>D food / replay</td><td class="num">1,006,138</td><td class="num">1,459</td><td class="num">14.501</td><td class="num">18,228</td><td class="num">7.680%</td><td class="num">0.318%</td><td class="num">3</td><td class="num">0</td></tr>
+</tbody></table></div>
+<p>四个取食率的最大差只有 0.199 次/万 tick。单个训练随机种子不能给出因素的置信区间；本文只据此确认四组都没有出现从偶尔取食到长期规划的跃迁。</p>
+
+<h3>4.3 最终冻结评测</h3>
+<p>每组加载第 143 次更新保存的权重，在固定的 30 个新环境随机种子上各运行一次确定性策略和一次随机采样策略。每一局从环境重置开始，执行到碰撞、填满棋盘或外部截断；只有填满完整 31×20 棋盘记为严格通关。</p>
+<div class="scroll"><table>
+<thead><tr><th>组</th><th class="num">确定性平均分</th><th class="num">确定性最高分</th><th class="num">确定性平均寿命</th><th class="num">随机平均分</th><th class="num">随机最高分</th><th class="num">通关</th></tr></thead>
+<tbody>
+<tr><td>A</td><td class="num">0.000</td><td class="num">0</td><td class="num">16.00</td><td class="num">0.0667</td><td class="num">1</td><td class="num">0 / 60</td></tr>
+<tr><td>B</td><td class="num">0.000</td><td class="num">0</td><td class="num">16.00</td><td class="num">0.0667</td><td class="num">1</td><td class="num">0 / 60</td></tr>
+<tr><td>C</td><td class="num">0.100</td><td class="num">1</td><td class="num">30.93</td><td class="num">0.0667</td><td class="num">1</td><td class="num">0 / 60</td></tr>
+<tr><td>D</td><td class="num">0.000</td><td class="num">0</td><td class="num">16.00</td><td class="num">0.0667</td><td class="num">2</td><td class="num">0 / 60</td></tr>
+</tbody></table></div>
+<p class="small">每种模式 30 局，评测随机种子为 610000–610029。A/B/D 的确定性策略 30/30 在第 16 tick 撞墙；C 也 30/30 撞墙，但 3 局吃到一个食物。随机与确定性共 60 局仅用于描述最后一个权重快照，不是多个训练随机种子的统计。</p>
+
+<h3>4.4 失败发生在哪里</h3>
+<div class="box">
+<div class="barrow"><span>撞墙</span><span class="bartrack"><span class="bar" style="width:99.786%"></span></span><span class="num">71,893</span></div>
+<div class="barrow"><span>自撞</span><span class="bartrack"><span class="bar zero" style="width:.125%"></span></span><span class="num">90</span></div>
+<div class="barrow"><span>撞障碍</span><span class="bartrack"><span class="bar zero" style="width:.089%"></span></span><span class="num">64</span></div>
+<p class="caption">分母为四组训练日志中的 72,047 个终局。它们来自在线采样，不是相互独立、训练时未见的评测局。</p>
+</div>
+
+<h2 id="diagnosis">5. 方法审计：先修估计问题，再增加预算</h2>
+<h3>5.1 J8 的八个随机变量没有同等执行机会</h3>
+<p>J8 每次决策独立采样 8 个方向，训练时把八项对数概率相加，再用同一次决策的合并回报更新。环境一次只前进 2–5 tick，命令还可能晚到、被新命令覆盖或过期，因此后段槽并不一定形成执行动作。</p>
+<div class="box">
+<p class="callout-title">一次旧回放离线诊断中的“同一次决策内执行率”</p>
+<div class="barrow"><span>slot 0</span><span class="bartrack"><span class="bar" style="width:32.85%"></span></span><span>32.85%</span></div>
+<div class="barrow"><span>slot 1</span><span class="bartrack"><span class="bar" style="width:65.86%"></span></span><span>65.86%</span></div>
+<div class="barrow"><span>slot 2</span><span class="bartrack"><span class="bar" style="width:72.86%"></span></span><span>72.86%</span></div>
+<div class="barrow"><span>slot 3</span><span class="bartrack"><span class="bar" style="width:47.85%"></span></span><span>47.85%</span></div>
+<div class="barrow"><span>slot 4</span><span class="bartrack"><span class="bar" style="width:23.38%"></span></span><span>23.38%</span></div>
+<div class="barrow"><span>slot 5–7</span><span class="bartrack"><span class="bar zero" style="width:.2%"></span></span><span>0%</span></div>
+<p class="caption">设计文档还记录：约 69.96% 的联合负对数概率来自当次未执行槽，约 3.75% 的动作块没有执行本次命令的任何槽。该记录尚未绑定具体训练运行、权重快照与审计脚本，样本口径也有 2381 与早先摘要 2399 的不一致。因此这些数值只用于提出下一轮诊断，不列为正式效果结果。</p>
+</div>
+<p>这不表示 J8 在数学上一定错误。若状态包含未决命令队列，整个动作块可以视为增广状态马尔可夫决策过程中的动作；后段槽也可能在下一次策略调用前后产生影响。本研究要检验的是：当前策略梯度把同一回报乘到八项动作对数概率上，可能为未形成可观察执行的变量引入额外方差。H1 把每次决策改为一次五分类采样并保持 8 槽，用于检验这项方差是否是瓶颈。</p>
+
+<h3>5.2 旧 128 步传输片段同时截断了回报</h3>
+<p>旧采集进程达到 128 次决策就封装一个传输片段（fragment）。游戏本身继续，GRU 记忆也继续，但更新网络的进程在片段末端用价值头估计尚未发生的回报，这一步称为 bootstrap。若食物在下一段才出现，它的奖励不会回写到上一段。增加总采样 tick 只会生成更多同样的断点，不能修复断点两侧的信用分配。</p>
+<p>IMPALA 的 V-trace 用行为策略与目标策略的概率比率修正 actor/learner 解耦产生的偏差 [2]；它没有要求项目把网络传输包边界同时当作任务信用边界。当前实现因此把两者分开。</p>
+
+<h3>5.3 旧取食配额很少改变批次</h3>
+<p>固定组每个训练批次最少 2048 次决策，食物中位数已经是 10；未加配额的 A/C 各只有 1/143 个批次少于 4 次取食。加配额后 B/D 的食物最小值变成 4，但平均批次长度只从 A 的 2058.65、C 的 2056.99 增到 B 的 2061.22、D 的 2062.52。本文因此把它解释为对停止条件的检查，而非已经持续改变训练数据分布的采样方法。</p>
+
+<h3>5.4 旧进度回放的正样本语义和陈旧度都不稳</h3>
+<p>旧代码按片段结束时的累计分数 <code>score_end</code> 分层。蛇在前一段吃过食物后，后一段即使没有新的取食事件，也会继续携带正分，因此进入正分层。该回放保存的是孤立片段，也再次把信用截在片段边界。</p>
+<div class="split">
+<div class="box"><p class="callout-title">C：固定批次 + 回放</p><p>回放样本的平均策略版本滞后 80.72，最大 273；重要性权重的平均有效样本比例为 0.542，越接近 1 表示权重越均匀；采集策略与当前策略的平均联合 KL 差异为 0.305，0 表示两者相同。</p></div>
+<div class="box"><p class="callout-title">D：取食配额 + 回放</p><p>平均策略版本滞后 70.34，最大 273；平均有效样本比例为 0.602；采集策略与当前策略的平均联合 KL 差异为 0.264。</p></div>
+</div>
+<p>LASER 专门讨论了策略—价值（actor-critic）方法在大规模回放中的陈旧数据与稳定性，并加入额外机制 [4]。本项目旧回放没有实现这些机制。本文把 C/D 归为“没有显示可信收益且陈旧度诊断不健康”；单个训练随机种子仍不足以得出“回放有害”的因果结论。</p>
+
+<h2 id="v3">6. v2/v3 修订了什么</h2>
+<h3>6.1 先修事件语义</h3>
+<p>v2 快照把“本片段新发生取食”与“本局此前已经得分”分开。取食发生后立即封存当前片段，但不重置游戏、不清空 GRU；下一段从同一局继续。旧的事件歧义回放格式被拒绝加载。该版本保存在远端 GPU 节点的归档目录，归档 SHA-256 为 <code>54d387948fb0e0d5c113e72c05052db2bf1f764f41bf64cf138dac0dc9e69ae9</code>。</p>
+
+<h3>6.2 再把三种长度拆开</h3>
+<div class="scroll"><table>
+<thead><tr><th>对象</th><th>当前含义</th><th>默认上限</th><th>是否决定回报边界</th></tr></thead>
+<tbody>
+<tr><td>传输片段</td><td>采集进程向训练进程发送的有界数据包</td><td>128 次决策</td><td>否</td></tr>
+<tr><td>信用序列</td><td>相邻传输片段拼成的回报序列，到取食、终局、外部截断或安全上限时闭合</td><td>2048 次决策</td><td>是</td></tr>
+<tr><td>截断式时间反向传播窗口（BPTT）</td><td>循环网络一次保留的自动求导图</td><td>128 次决策</td><td>不截断已算好的 V-trace 回报目标</td></tr>
+</tbody></table></div>
+<p>训练进程第一遍用冻结的当前参数、无梯度遍历完整信用序列，计算每步目标策略概率、价值和 V-trace 回报目标。第二遍按不超过 128 步的窗口重新前向并累积梯度，所有窗口完成后只更新一次优化器。未来奖励可以进入更早窗口的回报目标，但 GRU 参数梯度仍不会穿过窗口之间断开的记忆状态。这是截断式时间反向传播，不是整局游戏的端到端反传。</p>
+<p>循环状态的保存值和预热段设计参考 R2D2 对参数滞后、表示漂移和循环状态陈旧的分析 [3]；预热段只重建记忆，不计入损失。当前实现没有采用 R2D2 的 DQN 目标或优先级回放。跨片段拼接和两遍训练循环是本研究的适配，不能把论文结论直接外推为收敛保证。</p>
+
+<h3>6.3 数据守恒和时间语义</h3>
+<p>本研究把主预算改为训练进程第一次收到片段时累计的游戏 tick。每次更新都检查：</p>
+<div class="formula">累计接收 = 累计已训练 + assembler 中等待的前缀 + 已闭合但尚未训练的序列</div>
+<p>观测采集、观测收到、推理开始、推理结束和命令提交使用同一具名单调时钟的整数纳秒；游戏执行仍用逻辑 tick。用未决动作和延迟信息增广策略状态，是延迟控制强化学习中恢复决策状态信息的一类常见处理 [8][9]。当前只实现同主机时钟域。以后接入真实 HID 时，要新增独立的反馈采样与接收时间，不能拿画面时间或虚拟消费时间代替。</p>
+
+<h3>6.4 当前保留的两个动作头</h3>
+<div class="scroll"><table>
+<thead><tr><th>动作头</th><th>每次决策随机变量</th><th>输出给环境</th><th>用途</th><th>混杂因素</th></tr></thead>
+<tbody>
+<tr><td>J8</td><td>8 个五分类变量</td><td><code>[8,20]</code></td><td>保留块内方向变化能力</td><td>后段槽执行机会低，联合熵与负对数概率更大</td></tr>
+<tr><td>H1</td><td>1 个五分类变量</td><td>同一报告复制为 <code>[8,20]</code></td><td>检查 J8 的动作信用瓶颈</td><td>表达力下降，探索在时间上完全相关，熵尺度改变</td></tr>
+</tbody></table></div>
+<p>H1 借用了“一个动作保持多帧”的时间抽象；Atari DQN 与 ALE 协议也使用动作重复或 sticky action，但设置和作用不同 [6][7]。H1 不增加 sticky 随机性，既有延迟、丢帧和覆盖仍照常发生。本研究只把它作为诊断项，没有预先指定为最终手柄策略。</p>
+
+<h2 id="pause">7. 暂停时的真实断点</h2>
+<div class="scroll"><table>
+<thead><tr><th>项目</th><th>状态</th><th>现有证据</th><th>恢复工作前的处理</th></tr></thead>
+<tbody>
+<tr><td>v3 信用序列与窗口 V-trace</td><td><span class="state done">测试通过</span></td><td>完整序列目标、128/2048 同路径、每序列一次参数更新等有回归测试</td><td>制作归档快照并做 CUDA 基础运行检查</td></tr>
+<tr><td>片段因果校验加固</td><td><span class="state partial">已进工作树</span></td><td>全套测试通过；审查未收尾，专项负例覆盖不足</td><td>补时钟域、采集时点和来源优先级的专项测试</td></tr>
+<tr><td>动作执行审计</td><td><span class="state partial">独立函数</span></td><td>3 个单元测试</td><td>接入采集器、逐行 JSON 日志、Weights &amp; Biases 和离线分析器</td></tr>
+<tr><td>v3 离线结果分析器</td><td><span class="state partial">草稿</span></td><td>脚本已存在，无专门测试，Ruff 有 7 项问题</td><td>补测试、格式化，并用伪造坏工件验证拒绝路径</td></tr>
+<tr><td>静态质量门</td><td><span class="state none">未通过</span></td><td>Ruff 10 项；格式检查列出 11 个文件</td><td>恢复实现后先清零，再冻结源码</td></tr>
+<tr><td>版本契约</td><td><span class="state none">不一致</span></td><td>代码为 <code>credit-assembler-v2</code>，两份文档仍写 v1</td><td>统一文档、权重快照与拒绝迁移测试</td></tr>
+<tr><td>正式 v3 实验</td><td><span class="state none">未启动</span></td><td>无 v3 指标、权重快照或 GPU 源码快照</td><td>通过上述门后才启动首轮健康检查</td></tr>
+</tbody></table></div>
+
+<div class="bad">
+<p class="callout-title">当前工作树不能作为正式实验源码冻结</p>
+<p>本地 <code>resnake-gym</code> 环境为 Python 3.11.17、PyTorch 2.14.1+cpu、Gymnasium 1.4.0。382 项测试通过并不抵消静态检查失败；本地也没有 CUDA。仓库 HEAD 仍是旧提交 <code>dbfbae8</code>，当前实现大多未进入 Git，因此该提交号不能标识 v3 源码。</p>
+</div>
+
+<h2 id="protocol">8. 下一轮预登记：六组只回答三个问题</h2>
+<div class="scroll"><table>
+<thead><tr><th>组</th><th>动作头</th><th class="num">熵系数</th><th class="num">批下限</th><th class="num">信用上限</th><th>比较目的</th></tr></thead>
+<tbody>
+<tr><td>U0</td><td>J8</td><td class="num">0.001</td><td class="num">2048</td><td class="num">128</td><td>旧更新尺度对照</td></tr>
+<tr><td>J0</td><td>J8</td><td class="num">0.001</td><td class="num">512</td><td class="num">128</td><td>取食配额能否真正约束较小批次</td></tr>
+<tr><td>H0</td><td>H1</td><td class="num">0.001</td><td class="num">512</td><td class="num">128</td><td>相同系数的动作头对照</td></tr>
+<tr><td>H8</td><td>H1</td><td class="num">0.008</td><td class="num">512</td><td class="num">128</td><td>匹配 J8 的最大熵奖励</td></tr>
+<tr><td>JL</td><td>J8</td><td class="num">0.001</td><td class="num">512</td><td class="num">2048</td><td>J8 短信用与长信用</td></tr>
+<tr><td>HL</td><td>H1</td><td class="num">0.008</td><td class="num">512</td><td class="num">2048</td><td>H1 短信用与长信用</td></tr>
+</tbody></table></div>
+<p>本研究预登记六组都关闭孤立片段回放，使用相同 31×20 棋盘、随机障碍、延迟、丢帧、γ=0.9999、128 步反向传播窗口和取食目标 4。先用随机种子 2026 各跑 100 万实际接收 tick，只检查实现健康和学习方向；正式比较使用配对训练随机种子 2026、12026、22026。</p>
+<p>本研究只在三个随机种子中至少两个满足以下条件时，把候选延长到 300 万 tick：最后 25 万 tick 的取食率比最初 25 万提高 25%，并且“得分至少 2”的概率至少翻倍或至少两个随机种子出现得分 5，同时冻结的 200 个评测种子给出同向结果。最后一次未见测试使用随机种子 900000–900999。这个门只控制算力扩展，不把未通过写成“永远学不会”。</p>
+
+<h2 id="reproduce">9. 复现与恢复工作</h2>
+<h3>9.1 只读复核旧结果</h3>
+<div class="box">
+<p>旧工件位于 gpu_node：</p>
+<pre>/data/lyy/resnake_gym/vtrace-factorial-20261007/seed2026/
+  A_fixed_noreplay/
+  B_food_noreplay/
+  C_fixed_progress/
+  D_food_progress/</pre>
+<p>每组读取 <code>config.json</code>、<code>metrics.jsonl</code>、<code>validation-000143.json</code> 和 <code>validation-000143-stochastic.json</code>。本文的机器可读汇总见 <a href="data/2026-10-07-vtrace-v1-factorial-summary.json">v1 factorial summary JSON</a>。旧日志没有逐食物的精确接收 tick 位置，因此本文不计算精确的前后 25 万 tick 曲线。</p>
+</div>
+
+<h3>9.2 恢复实现时的门禁顺序</h3>
+<p>本地复核在 WSL 的 <code>/mnt/wsl/shared/ConCon/resnake_gym</code> 运行，使用 conda 环境 <code>resnake-gym</code>。以下命令只检查工作树，不启动训练：</p>
+<pre>cd /mnt/wsl/shared/ConCon/resnake_gym
+
+PYTHONDONTWRITEBYTECODE=1 conda run -n resnake-gym \
+  pytest -q -p no:cacheprovider
+
+conda run -n resnake-gym ruff check --no-cache .
+conda run -n resnake-gym ruff format --check .
+
+jq '{format, common, combined_training_episodes}' \
+  docs/reports/data/2026-10-07-vtrace-v1-factorial-summary.json</pre>
+<p>暂停时的预期结果是：pytest 显示 <code>382 passed, 3 warnings</code>；Ruff 检查失败并列出 10 项问题，格式检查列出 11 个待格式化文件；<code>jq</code> 显示 v1 汇总格式、31×20 共同配置和 72,047 个训练终局。代码继续修改后，测试数可以增长，但任何测试失败、非零 lint 或格式问题都应阻止源码冻结。</p>
+<ol>
+<li>统一 assembler v1/v2 文档和代码版本；补齐因果校验专项负例。</li>
+<li>把 <code>ActionExecutionAudit</code> 接到接收侧，只累计一次，并在 JSONL 中保留整数分子与分母。</li>
+<li>为离线分析器加入有效/无效工件测试，清零 Ruff 与格式问题。</li>
+<li>在新的归档源码目录运行全量 CPU 测试，再在 PyTorch 2.14.1+cu126 环境做 CUDA 基础运行、断点恢复和采集进程异常退出检查。</li>
+<li>核对日志中的 <code>received = trained + pending + ready</code>、时间字段单调、动作报告与来源一致；任一失败即停止，不启动正式矩阵。</li>
+<li>按预登记命令启动随机种子 2026 的首轮健康检查；Weights &amp; Biases（W&amp;B）只尾读落盘的逐行 JSON 日志，不进入采样热路径。</li>
+</ol>
+<p>恢复训练的真实入口是 <code>scripts/train_gamepad_vtrace.py</code>。GPU 节点的目标环境为 <code>/data/lyy/resnake_gym/env/rl-torch214-cu126</code>，但当前 v3 尚未部署到归档源码目录。具体参数和六组配置以 <a href="../vtrace-v3-experiment-protocol.md">v3 实验协议</a>为准；在当前质量门未清零前，本报告不提供一条可直接启动昂贵训练的命令。</p>
+
+<h2 id="robot">10. 这些结果怎样进入双臂灵巧手阶段</h2>
+<div class="box">
+<p>本研究在游戏侧与机器人侧之间保留目标手柄报告，而不是蛇的方向标签。以后同一策略可输出带时间的 <code>[L,20]</code> 张量；机器人策略以它作为条件，产生 AR5/G20 动作；实体手柄 HID 回传实际报告。这样可以分别测量三类误差：</p>
+<ol>
+<li><b>游戏决策误差：</b>目标报告本身是否导致取食、避障与通关；</li>
+<li><b>物理执行误差：</b>实际 HID 与目标报告的幅值、按键状态和时刻偏差；</li>
+<li><b>端到端时延误差：</b>画面采集、游戏策略、机器人推理、接触和 HID 回传各占多少时间。</li>
+</ol>
+<p>当前模型用“前向传递硬方向、反向沿软概率求导”的直通估计，在模型内部把方向模板连接到未归一化动作分数。这条梯度在转换为 NumPy、进入游戏状态转移、USB HID 或真实接触时中断。本研究若要联合优化，需要可微的执行模型、学习得到的替代模型，或继续用策略梯度处理不可微部分。现有代码没有证明视觉—语言—动作模型（VLA）、机械臂和游戏能够端到端联合求梯度。</p>
+</div>
+
+<h2 id="limits">11. 限制与结论</h2>
+<div class="box">
+<ul>
+<li>旧四臂只有一个训练随机种子。它足以判定“这一批运行没有学会”，不足以给取食配额或回放的平均因果效果排序。</li>
+<li>J8 执行槽审计没有保存独立工件，当前只能作为形成 H1 假设的线索。下一轮必须把审计接入正式日志。</li>
+<li>信用序列的 2048 步是内存安全上限，不代表完整一局；该安全上限仍会用价值估计封闭回报。</li>
+<li>完整序列的 V-trace 回报目标不等于完整序列的循环网络反向传播。循环参数梯度仍在 128 步处截断。</li>
+<li>障碍物生成器只保证候选通过当前求解器的接受规则；<code>unknown</code> 会被拒绝，但不等于数学上无解。</li>
+<li>当前没有真实手柄、G20 接触、双臂碰撞、AR5 控制周期或跨主机时钟校准数据。</li>
+</ul>
+</div>
+<div class="good">
+<p class="callout-title">当前结论</p>
+<p>旧 v1 方法在约四百万合计 tick 后仍停留在偶尔吃到一个食物、随后撞墙的水平。本文据此不建议按原方法直接增加迭代；下一步先完成 v3 质量门，再用预登记的 J8/H1、短/长信用对照判断瓶颈来自动作变量、信用跨度还是两者都不是。只有多个训练随机种子和冻结评测都出现同向学习趋势，才扩展到更大预算和机器人联合训练。</p>
+</div>
+
+<h2 id="artifacts">附录：代码与工件</h2>
+<div class="scroll"><table>
+<thead><tr><th>对象</th><th>位置</th><th>状态</th></tr></thead>
+<tbody>
+<tr><td>虚拟手柄 API</td><td class="path"><a href="../gamepad-api.html">docs/gamepad-api.html</a></td><td>交接文档；assembler 版本号待同步</td></tr>
+<tr><td>长信用设计</td><td class="path"><a href="../vtrace-progress-replay-design.md">docs/vtrace-progress-replay-design.md</a></td><td>设计说明；没有正式 v3 结果</td></tr>
+<tr><td>H1 诊断</td><td class="path"><a href="../held-dpad5-diagnostic.md">docs/held-dpad5-diagnostic.md</a></td><td>动作头与证据边界</td></tr>
+<tr><td>预登记协议</td><td class="path"><a href="../vtrace-v3-experiment-protocol.md">docs/vtrace-v3-experiment-protocol.md</a></td><td>尚未执行</td></tr>
+<tr><td>核心实现</td><td class="path"><a href="../../src/resnake_gym/gamepad_vtrace.py">src/resnake_gym/gamepad_vtrace.py</a></td><td>SHA-256 <code>aef064bd…</code></td></tr>
+<tr><td>动作审计函数</td><td class="path"><a href="../../src/resnake_gym/action_audit.py">src/resnake_gym/action_audit.py</a></td><td>未接入训练；SHA-256 <code>dd89de35…</code></td></tr>
+<tr><td>离线分析器</td><td class="path"><a href="../../scripts/analyze_vtrace_v3_results.py">scripts/analyze_vtrace_v3_results.py</a></td><td>未验收草稿；SHA-256 <code>68ec55c4…</code></td></tr>
+<tr><td>v2 不可变快照</td><td class="path"><code>/data/lyy/resnake_gym/source-snapshots/v2-event-h1-20261007</code></td><td>归档哈希 <code>54d38794…</code></td></tr>
+<tr><td>旧 v1 正式实验</td><td class="path"><code>/data/lyy/resnake_gym/vtrace-factorial-20261007/seed2026</code></td><td>四组完成</td></tr>
+<tr><td>本报告汇总</td><td class="path"><a href="data/2026-10-07-vtrace-v1-factorial-summary.json">data/2026-10-07-vtrace-v1-factorial-summary.json</a></td><td>由原始 JSONL 只读汇总</td></tr>
+</tbody></table></div>
+
+<h2 id="references">参考文献</h2>
+<ul class="ref">
+<li>[1] Farama Foundation. <a href="https://gymnasium.farama.org/api/env/">Gymnasium Env API</a>. 环境的 reset/step、terminated/truncated 接口。</li>
+<li>[2] L. Espeholt et al. <a href="https://proceedings.mlr.press/v80/espeholt18a.html"><i>IMPALA: Scalable Distributed Deep-RL with Importance Weighted Actor-Learner Architectures</i></a>. ICML, 2018. actor/learner 解耦与 V-trace。</li>
+<li>[3] S. Kapturowski et al. <a href="https://openreview.net/pdf?id=r1lyTjAqYX"><i>Recurrent Experience Replay in Distributed Reinforcement Learning</i></a>. ICLR, 2019. 循环状态陈旧、stored state 与 burn-in。</li>
+<li>[4] S. Schmitt, M. Hessel, K. Simonyan. <a href="https://proceedings.mlr.press/v119/schmitt20a.html"><i>Off-Policy Actor-Critic with Shared Experience Replay</i></a>. ICML, 2020. 大规模 actor-critic replay 的陈旧度与稳定性。</li>
+<li>[5] A. Y. Ng, D. Harada, S. Russell. <a href="https://ai.stanford.edu/~ang/papers/shaping-icml99.pdf"><i>Policy Invariance under Reward Transformations: Theory and Application to Reward Shaping</i></a>. ICML, 1999. 势函数奖励塑形。</li>
+<li>[6] V. Mnih et al. <a href="https://doi.org/10.1038/nature14236"><i>Human-level control through deep reinforcement learning</i></a>. Nature, 2015. Atari 动作重复设置。</li>
+<li>[7] Farama Foundation. <a href="https://ale.farama.org/env-spec/#action-repeat-stochasticity">ALE Environment Specifications</a>. action repeat stochasticity、sticky action 与 minimal action set 的报告要求。</li>
+<li>[8] B. Chen et al. <a href="https://arxiv.org/abs/2005.05440"><i>Delay-Aware Model-Based Reinforcement Learning for Continuous Control</i></a>. Neurocomputing, 2021. 延迟状态增广。</li>
+<li>[9] S. Nath, M. Baranwal, H. Khadilkar. <a href="https://arxiv.org/abs/2108.07555"><i>Revisiting State Augmentation Methods for Reinforcement Learning with Stochastic Delays</i></a>. CIKM, 2021. 随机观测与动作延迟。</li>
+<li>[10] Microsoft. <a href="https://learn.microsoft.com/en-us/windows/win32/api/xinput/ns-xinput-xinput_gamepad">XINPUT_GAMEPAD structure</a>. 实体控件字段参照；本项目的 20 维归一化排列是自定义接口。</li>
+</ul>
+
+<p class="small">正文对应复审记录：<a href="2026-10-07-resnake-vtrace-method-audit_review.md">2026-10-07-resnake-vtrace-method-audit_review.md</a>。报告是暂停时点的工作树快照，不代表 v3 实验已经完成。</p>
+</main>
+</body>
+</html>

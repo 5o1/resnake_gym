@@ -1,0 +1,59 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<title>障碍生成与可解性验证</title>
+<style>body{max-width:960px;margin:40px auto;padding:0 24px;font:16px/1.85 system-ui;color:#222}h2{margin-top:2em}code,pre{background:#f3f4f6}pre{padding:16px;overflow:auto}table{border-collapse:collapse;width:100%}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}</style>
+<h1>障碍生成与可解性验证</h1>
+<p>本页替代早期“双格U形折返”的生成限制。候选障碍和验证算法已经拆开；20维手柄布局、scene-grid-v2的14通道及时间戳协议不变。这里讨论环境生成，不提供策略、动作建议或强化学习训练数据。</p>
+<h2>判定目标</h2>
+<p>验证的对象是当前地图、按头到尾排序的蛇身、朝向和眼前食物。目标为：存在一个策略，使它在所有后续合法食物位置下最终填满非障碍格。忽略episode时间上限，暂不考虑尚未发生的下一次环境扰动。这个目标强于“某条幸运食物序列能通关”，也强于“下一颗能吃到”。</p>
+<p>环境仍先在副本中执行已知动作前缀，再判定所得状态；副本前缀内沿用实际随机数状态，前缀之后才采用上述全称食物条件。前缀撞死表示在给定前缀条件下不能通过，不是说允许立刻撤销动作时也无解。未来新命令可以改变前缀，这个条件边界未消失。</p>
+<table><tr><th>返回值</th><th>含义</th></tr>
+<tr><td>solvable</td><td>找到有效覆盖环证书，或完整状态博弈证明能保证填满。</td></tr>
+<tr><td>unsolvable</td><td>必要条件已失败，或完整状态博弈证明不存在上述保证策略。后者不表示所有特定食物序列都必败。</td></tr>
+<tr><td>unknown</td><td>搜索预算耗尽，或无法找到环且状态规模超过精确搜索限制。不能计入无解率。</td></tr></table>
+<p>候选压住当前身体／食物、越界或超过障碍上限属于入场条件失败，不冒充数学上的无解。只有solvable会生效；unknown也暂不生效，但日志必须保留它与unsolvable的区别。</p>
+<h2>三层算法</h2>
+<p>第一层按非障碍格建图，检查连通性、黑白格数量差、度为1的格子数量，以及当前是否存在合法移动。填满时蛇身必然是一条Hamilton路径：黑白格之差大于1、叶子多于2或图不连通，都足以排除填满。通过这些条件不是可解证明。尤其不把“存在一个叶子”当作当前局面必败，蛇可能正好在终点吃完最后一颗。</p>
+<p>第二层先尝试廉价的旧模板，再做一般的Hamilton环约束搜索。每个顶点恰好选择两条边；禁止少于全图顶点数的闭合子环。当前蛇身边强制选入，搜索分支进行度约束传播和子环剪枝；找到环后，独立检查覆盖、邻接、身体次序和初始朝向。强制身体连续地嵌入环是一种较强的充分条件，没有找到这种环仍返回unknown或进入下一层。</p>
+<p>第三层枚举可达的完整状态(body, heading, food)。策略选择移动是OR，吃到食物后的所有合法食物位置是AND；从填满状态反向计算最小吸引集合。只有某个动作的所有后继都已获胜，该状态才获胜。这样不会把无穷绕圈误认为完成。完整展开并收敛才能判无解，展开途中超时／超状态数一律unknown。</p>
+<p>第三层默认只用于至多16个非障碍格、至多5000个状态。小场景用于验证算法及解决接近填满的小残余图，不用作训练能力成绩；31×20上没有实现任意局面的完整高效求解。</p>
+<h2>候选分布</h2>
+<p>自动采样器现为mixed-shapes-certificate-domain-v2。它先从1—6中删掉超过障碍总量上限的大小；如果这个局面只能走覆盖环验证，还会删掉令剩余自由格为奇数的大小。网格图是二部图，环上黑白格交替，所以覆盖环不可能含奇数个顶点。31×20棋盘已有6格障碍时，可选大小因此是2、4、6，不会先生成5格再等验证器必然返回cycle_necessary_condition_failed。</p>
+<p>同步模式在剩余自由格不超过exact_cell_limit时仍可选奇数大小，因为完整状态博弈可能证明没有覆盖环的局面可完成；异步模式只传递可复核的环证书，因此始终使用上述奇偶限制。这只是按格数收窄自动提案域，不是可解判定。候选位置造成的黑白失衡、断图、身体不兼容、搜索预算耗尽及激活时占用仍由后续检查如实拒绝，不会重抽到成功为止。</p>
+<p>确定大小后只抽一次scatter（离散格）、line（直线）或patch（相邻扩张块）。散点可以不相邻，直线可以长于两格。不根据旧覆盖环筛位置，也不先筛成黑白配平。手动request_obstacles不受自动采样器的大小域约束，仍可提交任意有效坐标集合；独立sample_obstacles函数也保留1—6的原始无条件分布。</p>
+<p>这不是在全部障碍子集上的均匀分布；安全筛选后分布还会改变。需同时记录提出的family、格数、几何有效时的坐标、是否生效、验证结论、原因、搜索节点／状态数量和耗时。不能只统计已接受样本。旧obstacle_candidates仅保留为回归测试夹具，不再被环境调用。</p>
+<h2>预算与实时影响</h2>
+<pre>from resnake_gym.envs.perturbed_gamepad import PerturbedGamepadEnv
+env = PerturbedGamepadEnv(
+    width=31, height=20, obstacle_batch_size=(1, 6),
+    solver_budget=dict(cycle_nodes=2000, state_limit=5000,
+                       exact_cell_limit=16, time_limit_ms=50))</pre>
+<p>裸环境默认同步模式，墙钟预算50ms，另有2000个环搜索分支预算。时间检查是合作式软截止，建图、传播或一个检查步骤可能略超时。同步求解发生在环境step内部，增加预算会影响游戏节拍；不能把它归因于模型推理。实时运行器现已默认切换到下述异步模式。</p>
+<p>离线比较可设置time_limit_ms=None，只使用确定性的节点／状态预算；固定输入和预算可复现判定。启用墙钟截止时，主机负载可能影响接受结果，即使随机种子相同。默认50ms不是正式实验的推荐最优值，只是防止无界搜索的工程上限。</p>
+<h2>本次检查：覆盖变广，但实时预算下仍不足</h2>
+<p>以下数字是v2大小筛选加入前留下的raw sample_obstacles历史对照，不是mixed-shapes-certificate-domain-v2的接受率。在31×20固定初始蛇身、三帧中立前缀上，用seed=20261006提出30个随机候选；另设“两个不相邻孔”和“内部2×2孔”两个选定夹具，不计入随机接受率。两组检查使用相同候选与2000个分支上限，只改变墙钟预算。</p>
+<table><tr><th>预算</th><th>已证可解</th><th>已证无解</th><th>未判定</th><th>候选几何失败</th></tr>
+<tr><td>50ms</td><td>0</td><td>6</td><td>23</td><td>1</td></tr>
+<tr><td>1000ms</td><td>8</td><td>6</td><td>15</td><td>1</td></tr></table>
+<p>1000ms组的可解候选包含六格长墙、不相邻散点、四格与六格块。两个夹具均由通用环搜索证明，约耗时327ms、344ms，而非旧模板命中。这说明双格限制已去掉，但把整个搜索塞进50ms单帧预算无法满足本批样本的覆盖率。上述为同步版本的历史对照；后台计算及生效时重验现已实现，见下一节。</p>
+<p>完整测试186项通过，2个Torch模块因本地未装Torch跳过。新增测试包括小图穷举环交叉验证、独立逐轮吸引集合对照、实际游戏转移对照、无环可赢、单格障碍、预算unknown、31×20非相邻障碍，以及不向策略泄漏路径。上述数字只证明工具检查结果，不证明RL任务能力。</p>
+<pre>python scripts/benchmark_solvability.py --cases 30 --seed 20261006 \
+  --time-limit-ms 1000 --output /data/lyy/resnake_gym/artifacts/solvability.json</pre>
+<h2>异步提交与快速复核（后续更新）</h2>
+<p>预告时复制状态并向一个常驻spawn进程提交任务，游戏继续推进。默认后台预算为预告步数除以逻辑帧率；排队和冷启动消耗同一个窗口，不在结果到达后另给宽限期。后台返回经过结构验证的覆盖环及正反向序号表。生效时检查episode／地图版本、求解完成时间、障碍占用与新食物，在副本上重放当时的已知动作前缀，再按当前身体在环上的次序及朝向快速复核。生效时没有第二次搜索。</p>
+<p>自动候选提前排除当前全身与蛇头notice_ticks+protected_ticks步曼哈顿范围的并集。旧尾部保守保留，不假定吃食物时也会释放。该包络不预测策略具体路径，也不能独自证明可解，只减少占用冲突；旋转的候选不使用此位置包络，而在变换后的坐标系下复核。手动候选可位于包络内，但生效时仍须通过检查。</p>
+<p>任务以episode标识、请求编号和地图版本匹配，重开或地图改变后旧证书不能应用。到预定tick仍未就绪、超时、证书不兼容或队列拥塞，都跳过并记录；不暂停游戏或偷偷延后扰动。最多一个worker、一个排队任务和两个结果槽，旧任务可能运行至预算结束，但不会无限堆积。close会停止并回收进程，step中不join、不等待Future。</p>
+<p>本阶段异步只支持可复核的环证书。精确状态博弈的旧布尔结论不能证明未来状态，未实现胜区证书传递；同步模式仍保留该层。一般复核失败只说明旧证书失效，标记unknown，不能推断当前状态无解。</p>
+<table><tr><th>31×20选定布局，10Hz，提前6帧</th><th>同步最大step</th><th>异步最大step</th><th>后台搜索期间推进帧数</th><th>异步结果</th></tr>
+<tr><td>两个不相邻孔</td><td>329.80ms</td><td>0.94ms</td><td>3</td><td>目标tick=6生效</td></tr>
+<tr><td>内部2×2孔</td><td>338.83ms</td><td>1.60ms</td><td>3</td><td>目标tick=6生效</td></tr></table>
+<p>上述测试包含worker冷启动，使用中立控制，仅是两个选定布局的时序检查，不是随机接受率或策略能力。后台搜索仍花费约318ms和335ms，并未变快；长计算已从游戏step移走。OS调度、IPC和前缀复核仍有开销，不保证硬实时。快速非墙钟训练默认保持sync，不能让数千Hz的逻辑循环悄悄耗尽真实时间的预告窗口；正式训练／评测必须分别报告模式、包络筛选、截止失败和证书失效比例。</p>
+<p>异步改造后的完整回归为199项通过、2个Torch模块跳过。覆盖了超时、旧episode结果、地图版本失配、新食物占用、身体证书失效、队列不可用、工作进程回收及大观测退出。回归中修复了实时队列的退出问题：不能在大帧发送一半时取消发送线程；退出时由接收端排空队列，再完成发送线程回收。step路径仍不等待求解器。</p>
+<pre>env = PerturbedGamepadEnv(solver_mode="async", notice_ticks=6, logic_fps=10)
+# 使用with运行器或显式env.close()释放进程。
+python scripts/benchmark_async_solvability.py --output /data/lyy/resnake_gym/artifacts/async-check.json</pre>
+<p>时间字段和跨线程约定见<a href="gamepad-api.html">API文档</a>。进程隔离、spawn与有界队列语义参考<a href="https://docs.python.org/3/library/multiprocessing.html">Python官方文档</a>；异步提交及证书复核是本项目适配，不声称复现下述论文的完整控制器。</p>
+<h2>算法来源与实现差异</h2>
+<p><a href="https://arxiv.org/html/2506.21281v1">Playing Snake on a Graph</a>用于区分Hamilton路径必要条件、环充分条件和任意食物条件；论文也给出没有Hamilton环但仍可完成的图。本项目因此只把自由格偶数用于“环证书型自动采样器”的大小筛选，不把奇数自由格写成Snake无解。当前身体、朝向及输入前缀是项目额外约束，也不直接套用从单格蛇开始的图分类结论。</p>
+<p><a href="https://arxiv.org/abs/2408.08150">Winning Snake: Design Choices in Multi-Shot ASP</a>及<a href="https://github.com/elbo4u/asp-snake-ms">作者仓库</a>提供与蛇身兼容的环规划研究背景；本次未复现其multi-shot ASP策略，也未把其控制器接入训练。搜索编码依据<a href="https://www.scipopt.org/doc-5.0.0/html/TSP_MAIN.php">SCIP官方TSP例子的度约束与子环消除</a>，实现为有预算的Python约束回溯，不声称使用了SCIP。</p>
+<p>完整状态层采用可达性博弈的最小吸引集合，参考<a href="https://www.logic.rwth-aachen.de/pub/graedel/CGLP15.pdf">Defining Winning Strategies in Fixed-Point Logic</a>对reachability胜区的描述；状态构造、食物AND分支和预算处理是本项目适配。没有导出获胜策略，外部只返回判定元数据和环证书摘要。</p>
+</html>
